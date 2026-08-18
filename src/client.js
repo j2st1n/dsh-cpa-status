@@ -532,7 +532,7 @@ window.__ModuleLoader__.load({
             const bg = total === 0
               ? 'color-mix(in srgb, var(--dsw-alias-label-secondary) 16%, transparent)'
               : b.failed > 0 ? T.err : T.ok
-            return h('div', { key: i, title: `${b.time || '该时段'} · 成功 ${b.ok} / 失败 ${b.failed}`, style: { flex: 1, height: 12, borderRadius: 2, background: bg } })
+            return h('div', { key: i, title: `${b.time || '该时段'} · 成功 ${b.ok} / 失败 ${b.failed}`, style: { flex: 1, height: 5, borderRadius: 2, background: bg } })
           }),
         ),
       ])
