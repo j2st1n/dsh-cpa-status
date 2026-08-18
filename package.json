@@ -1,0 +1,24 @@
+{
+  "name": "dsh-cpa-status",
+  "version": "0.1.0",
+  "description": "DeepSeek Harness 插件：CLIProxyAPI(CPA) 账号池状态面板——配额、健康刻度、流量一览 / CPA status panel for DSH",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.js",
+    "./client": "./src/client.js",
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": []
+    }
+  },
+  "dependencies": {
+    "@deepseek-ai/schemastery": "^3.18.1"
+  },
+  "license": "MIT"
+}
