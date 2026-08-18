@@ -312,14 +312,32 @@ function parseXaiQuota(body) {
   const windows = []
   const period = cfg?.currentPeriod
   if (period) {
-    const cap = toInt(cfg?.onDemandCap?.val)
-    const used = toInt(cfg?.onDemandUsed?.val)
     const resetAt = period.end ? Date.parse(period.end) : NaN
+    const reset = Number.isNaN(resetAt) ? null : resetAt
+    const toPct = (v) => {
+      const n = typeof v === 'number' ? v : Number(v)
+      return Number.isFinite(n) ? Math.min(100, Math.max(0, Math.round(100 - n))) : null
+    }
+    // 周限额：creditUsagePercent 是「已用 %」（统一计费用户的真实配额池）
+    const usedPct = toPct(cfg?.creditUsagePercent)
     windows.push({
       label: period.type === 'USAGE_PERIOD_TYPE_WEEKLY' ? 'Weekly' : 'Period',
-      remainingPct: cap !== null && used !== null && cap > 0 ? Math.max(0, Math.round(((cap - used) / cap) * 100)) : null,
-      resetAt: Number.isNaN(resetAt) ? null : resetAt,
+      remainingPct: usedPct,
+      resetAt: reset,
     })
+    // 产品维度（GrokBuild 等）：仅在与整体用量不同的时候才单列，避免重复条
+    for (const p of Array.isArray(cfg?.productUsage) ? cfg.productUsage : []) {
+      const pct = toPct(p?.usagePercent)
+      if (p?.product && pct !== null && pct !== usedPct) {
+        windows.push({ label: String(p.product), remainingPct: pct, resetAt: reset })
+      }
+    }
+    // 按量付费：仅启用时（cap>0）展示；未启用（cap=0）不渲染死行
+    const cap = toInt(cfg?.onDemandCap?.val)
+    const used = toInt(cfg?.onDemandUsed?.val)
+    if (cap !== null && cap > 0 && used !== null) {
+      windows.push({ label: '按量付费', remainingPct: Math.max(0, Math.round(((cap - used) / cap) * 100)), resetAt: reset })
+    }
   }
   return { plan: null, windows }
 }
