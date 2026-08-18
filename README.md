@@ -44,3 +44,15 @@ dsh plugin --profile web add ./dsh-cpa-status-0.1.0.tgz
 - **Management Key**：CPA 管理密钥，仅存本机凭据库
 
 Public URL 可选（「管理页 ↗」外链，默认 `{Base URL}/management.html`）。亦可用环境变量 `CPA_BASE_URL` / `CPA_MANAGEMENT_KEY` 预置（env 注入时表单密钥只读）。
+
+## 安全
+
+- Management Key 只写入本机凭据库，接口响应不回传完整密钥
+- 账号/网关字段白名单返回；网关密钥仅显示末四位
+- 面板可开脱敏模式，进一步打码邮箱、地址与名称
+
+详见 [SECURITY.md](./SECURITY.md)。
+
+## License
+
+Apache-2.0
