@@ -35,6 +35,8 @@ const REQUEST_TIMEOUT_MS = 10_000
 const schema = z.object({
   baseUrl: z.string().default(''),
   publicUrl: z.string().default(''),
+  // 脱敏模式：显示层打码（邮箱/地址/账号名/密钥提示），数据本身不受影响
+  privacyMode: z.boolean().default(false),
 })
 
 // ---------------------------------------------------------------------------
@@ -484,6 +486,7 @@ export function apply(ctx) {
     return {
       baseUrl: cfg.baseUrl,
       publicUrl: cfg.publicUrl,
+      privacyMode: cfg.privacyMode === true,
       managementKey: {
         configured: info.configured,
         source: info.source ?? null,
@@ -746,7 +749,7 @@ export function apply(ctx) {
             error: { code: 'KEY_NOT_WRITABLE', message: `密钥写入失败：${error?.message ?? error}` },
           })
         }
-        await scope.update({ baseUrl, publicUrl })
+        await scope.update({ baseUrl, publicUrl, privacyMode: body.privacyMode === true })
 
         // —— 保存后探测：失败不回滚，但如实告知（M1 语义） ——
         invalidateCaches()

@@ -210,6 +210,7 @@ window.__ModuleLoader__.load({
         gateways: null,
         gatewaysError: null,
         tab: null, // null = 自动（两类并存时默认认证文件页）
+        privacy: false, // 脱敏模式：显示层打码，由 config.privacyMode 回填
       },
       listeners: new Set(),
       set(patch) {
@@ -242,10 +243,28 @@ window.__ModuleLoader__.load({
     }
     async function refreshConfig() {
       try {
-        store.set({ config: await api('/api/cpa-status/config') })
+        const config = await api('/api/cpa-status/config')
+        store.set({ config, privacy: config?.privacyMode === true })
       } catch {
         /* 回填留空即可 */
       }
+    }
+    /** 脱敏模式开关：立即生效（显示层），并异步持久化到设置（带上现有地址字段满足 PUT 校验）。 */
+    function togglePrivacy() {
+      const privacy = !store.state.privacy
+      store.set({ privacy })
+      const cfg = store.state.config ?? {}
+      api('/api/cpa-status/config', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ baseUrl: cfg.baseUrl ?? '', publicUrl: cfg.publicUrl ?? '', privacyMode: privacy }),
+      })
+        .then((res) => {
+          if (res?.config) store.set({ config: res.config })
+        })
+        .catch(() => {
+          /* 持久化失败不影响本次显示 */
+        })
     }
     async function refreshAccounts(force, withQuota) {
       const st = store.state.status
@@ -327,6 +346,40 @@ window.__ModuleLoader__.load({
       } catch {
         return url
       }
+    }
+
+    // ---------- 脱敏（显示层打码；数据原样保留，开关即时切换） ----------
+    const isPrivacy = () => store.state.privacy === true
+    /** 邮箱：首字符 + ***@***.tld */
+    function maskEmail(v) {
+      if (!isPrivacy() || !v) return v
+      const at = v.indexOf('@')
+      if (at < 1) return maskName(v)
+      const dot = v.lastIndexOf('.')
+      const tld = dot > at ? v.slice(dot) : ''
+      return `${v[0]}***@***${tld}`
+    }
+    /** 名称：保留类型段或前两字（codex-y2f9 → codex-***；百炼TokenPlan → 百炼***） */
+    function maskName(v) {
+      if (!isPrivacy() || !v) return v
+      const sep = v.search(/[-_]/)
+      if (sep > 0) return `${v.slice(0, sep)}-***`
+      return `${v.slice(0, 2)}***`
+    }
+    /** 账号标签：含 @ 走邮箱规则，否则走名称规则 */
+    function maskLabel(v) {
+      if (!isPrivacy() || !v) return v
+      return v.includes('@') ? maskEmail(v) : maskName(v)
+    }
+    /** 主机名 / URL 展示：首字符 + *** */
+    function maskHost(v) {
+      if (!isPrivacy() || !v) return v
+      return `${v[0]}***`
+    }
+    /** 密钥提示：字母数字全部打码（••••ab12 → ••••••••） */
+    function maskHint(v) {
+      if (!isPrivacy() || !v) return v
+      return v.replace(/[A-Za-z0-9]/g, '•')
     }
     /** 相对时间：刚刚 / N 分钟前 / N 小时前 / N 天前。 */
     function fmtAgo(ts) {
@@ -562,7 +615,7 @@ window.__ModuleLoader__.load({
           // 标题行：真实提供商图标 + 名称 + 供应商类型标签 + 套餐徽章 + 状态
           h('div', { key: 'hd', style: { display: 'flex', alignItems: 'center', gap: 8, marginBottom: 5 } }, [
             h(ProviderIcon, { provider: a.provider }),
-            h('span', { style: { fontSize: 12, color: T.label, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, title: a.label }, a.label || a.id),
+            h('span', { style: { fontSize: 12, color: T.label, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, title: maskLabel(a.label) }, maskLabel(a.label) || a.id),
             h(ProviderTag, { provider: a.provider, accountType: a.accountType }),
             h(PlanBadge, { plan: a.plan }),
             h('span', { style: { marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 5, flexShrink: 0 } }, [
@@ -635,7 +688,7 @@ window.__ModuleLoader__.load({
         [
           h('div', { key: 'hd', style: { display: 'flex', alignItems: 'center', gap: 8 } }, [
             h(ProviderIcon, { provider: pkey }),
-            h('span', { style: { fontSize: 12, color: T.label, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, title }, title),
+            h('span', { style: { fontSize: 12, color: T.label, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, title: maskName(title) }, maskName(title)),
             typeTag
               ? h('span', { style: { fontSize: 10, color: providerColor(pkey), border: `1px solid ${providerColor(pkey)}`, borderRadius: 4, padding: '0 4px', flexShrink: 0, lineHeight: '14px', opacity: 0.9 } }, typeTag)
               : null,
@@ -646,8 +699,8 @@ window.__ModuleLoader__.load({
             ]),
           ].filter(Boolean)),
           h('div', { key: 'sub', style: { display: 'flex', fontSize: 11, color: T.secondary, gap: 10, flexWrap: 'wrap', marginTop: 3 } }, [
-            g.baseUrl ? h('span', { key: 'u', title: g.baseUrl, style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 200 } }, hostOf(g.baseUrl)) : null,
-            g.keys.length ? h('span', { key: 'k' }, `密钥 ${g.keys.map((k) => k.hint).join('、')}`) : null,
+            g.baseUrl ? h('span', { key: 'u', title: maskHost(g.baseUrl), style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 200 } }, maskHost(hostOf(g.baseUrl))) : null,
+            g.keys.length ? h('span', { key: 'k' }, `密钥 ${g.keys.map((k) => maskHint(k.hint)).join('、')}`) : null,
             g.models.length
               ? h('span', { key: 'm', title: g.models.map((m) => (m.alias ? `${m.name} → ${m.alias}` : m.name)).join('、') },
                   `模型 ${g.models.slice(0, 3).map((m) => m.alias || m.name).join('、')}${g.models.length > 3 ? ` 等${g.models.length}个` : ''}`)
@@ -720,7 +773,7 @@ window.__ModuleLoader__.load({
       ].filter(Boolean)
       const { accounts, gateways, bothTypes, activeTab } = listMode(state)
       const issues = st?.issues?.length
-        ? `异常账号 ${st.issues.length} 个（${st.issues[0].id}${st.issues.length > 1 ? ' 等' : ''}）`
+        ? `异常账号 ${st.issues.length} 个（${maskName(st.issues[0].id)}${st.issues.length > 1 ? ' 等' : ''}）`
         : null
       return h('div', { style: { flexShrink: 0, padding: '10px 16px', borderBottom: `1px solid ${T.border}` } }, [
         chips.length
@@ -831,7 +884,7 @@ window.__ModuleLoader__.load({
           const result = await api('/api/cpa-status/config', {
             method: 'PUT',
             headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ baseUrl, publicUrl, ...(managementKey ? { managementKey } : {}) }),
+            body: JSON.stringify({ baseUrl, publicUrl, privacyMode: state.privacy, ...(managementKey ? { managementKey } : {}) }),
           })
           store.set({ status: result.status, config: result.config, accounts: null })
           setManagementKey('')
@@ -857,7 +910,7 @@ window.__ModuleLoader__.load({
           const result = await api('/api/cpa-status/config', {
             method: 'PUT',
             headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ baseUrl: baseUrl || cfg?.baseUrl || '', clearManagementKey: true }),
+            body: JSON.stringify({ baseUrl: baseUrl || cfg?.baseUrl || '', privacyMode: state.privacy, clearManagementKey: true }),
           })
           store.set({ status: result.status, config: result.config, editing: false, accounts: null })
         } catch (e) {
@@ -872,13 +925,14 @@ window.__ModuleLoader__.load({
           h('label', { style: labelStyle }, 'Base URL *'),
           h('input', {
             style: inputStyle,
+            type: state.privacy ? 'password' : undefined, // 脱敏时以密码框样式打码，值不受影响
             value: baseUrl,
             placeholder: 'https://your-cpa.example.com 或 http://127.0.0.1:8317',
             onChange: (e) => setBaseUrl(e.target.value),
           }),
         ]),
         h('div', { key: 'k', style: { marginBottom: 10 } }, [
-          h('label', { style: labelStyle }, `Management Key *${keyState.configured ? `（已保存 ${keyState.hint ?? ''}）` : ''}`),
+          h('label', { style: labelStyle }, `Management Key *${keyState.configured ? `（已保存 ${maskHint(keyState.hint) ?? ''}）` : ''}`),
           h('input', {
             style: { ...inputStyle, opacity: keyState.writable ? 1 : 0.6 },
             type: 'password',
@@ -895,6 +949,7 @@ window.__ModuleLoader__.load({
           h('label', { style: labelStyle }, 'Public URL（可选，「管理页」外链）'),
           h('input', {
             style: inputStyle,
+            type: state.privacy ? 'password' : undefined,
             value: publicUrl,
             placeholder: '默认 {Base URL}/management.html',
             onChange: (e) => setPublicUrl(e.target.value),
@@ -995,12 +1050,31 @@ window.__ModuleLoader__.load({
           // 固定头部：标题 + 关闭（不随内容滚动）
           h('div', { key: 'hd', style: { display: 'flex', alignItems: 'baseline', padding: '14px 16px 10px', borderBottom: `1px solid ${T.border}`, flexShrink: 0 } }, [
             h('span', { style: { fontSize: 13, fontWeight: 600, color: T.label } }, showConfig ? '连接 CPA' : 'CPA 状态'),
-            subtitle ? h('span', { style: { fontSize: 11, color: T.secondary, marginLeft: 8 } }, subtitle) : null,
+            subtitle ? h('span', { style: { fontSize: 11, color: T.secondary, marginLeft: 8 } }, maskHost(subtitle)) : null,
+            // 脱敏模式快捷开关（截图/共享屏幕前一点即打码；持久化到配置）
             h(
               'button',
               {
                 className: 'cpa-btn',
-                style: { ...btnBase, marginLeft: 'auto', border: 'none', padding: '2px 6px', alignSelf: 'center' },
+                style: {
+                  ...btnBase,
+                  marginLeft: 'auto',
+                  border: 'none',
+                  padding: '2px 6px',
+                  alignSelf: 'center',
+                  color: state.privacy ? T.brand : T.secondary,
+                  opacity: state.privacy ? 1 : 0.75,
+                },
+                onClick: togglePrivacy,
+                title: state.privacy ? '脱敏模式已开启：邮箱/地址/名称/密钥提示已打码，点击关闭' : '开启脱敏模式：打码邮箱、地址、名称、密钥提示',
+              },
+              state.privacy ? '◉' : '◎',
+            ),
+            h(
+              'button',
+              {
+                className: 'cpa-btn',
+                style: { ...btnBase, border: 'none', padding: '2px 6px', alignSelf: 'center' },
                 onClick: () => store.set({ open: false, editing: false }),
                 title: '关闭',
               },

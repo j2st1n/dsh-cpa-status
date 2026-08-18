@@ -20,5 +20,15 @@
   "dependencies": {
     "@deepseek-ai/schemastery": "^3.18.1"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "files": [
+    "src",
+    "cordis.patch.yml"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/xohmai/dsh-cpa-status.git"
+  },
+  "homepage": "https://github.com/xohmai/dsh-cpa-status#readme",
+  "bugs": "https://github.com/xohmai/dsh-cpa-status/issues"
 }
