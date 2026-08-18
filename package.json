@@ -41,5 +41,8 @@
     "url": "git+https://github.com/xohmai/dsh-cpa-status.git"
   },
   "homepage": "https://github.com/xohmai/dsh-cpa-status#readme",
-  "bugs": "https://github.com/xohmai/dsh-cpa-status/issues"
+  "bugs": "https://github.com/xohmai/dsh-cpa-status/issues",
+  "engines": {
+    "node": ">=20"
+  }
 }
