@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.5
+
+- 修复 CPA 管理接口 `api-call` 载荷兼容性：支持 `data` 与 `body` 双字段注入及自动提取 `file.project_id`，打通 Google 官方 `daily-cloudcode-pa` 分组配额池（返回真实扣减百分比）
+- 优化前端提供商图标：新增 Antigravity 官方正版反重力矢量 Logo 与品牌科技蓝配色
+- 增强配额池模型聚合与权重排序：对齐普号/会员分组池规范
+
 ## 0.1.4
 
 - 优化 Antigravity 套餐名称简化：将 `Antigravity Starter Quota` 等超长全称精简为简洁的 `Starter` 徽章

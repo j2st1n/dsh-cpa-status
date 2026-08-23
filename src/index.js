@@ -408,10 +408,13 @@ function formatAntigravityWindow(window, displayName, bucketId) {
 
 function windowSortWeight(label) {
   const s = String(label ?? '').toLowerCase()
-  if (s.includes('5h') || s.includes('five')) return 0
-  if (s.includes('1d') || s.includes('day') || s.includes('24h')) return 1
-  if (s.includes('weekly') || s.includes('week') || s.includes('7d')) return 2
-  return 3
+  if (s.includes('gemini') && (s.includes('5h') || s.includes('five'))) return 0
+  if (s.includes('gemini')) return 1
+  if (s.includes('claude') && (s.includes('5h') || s.includes('five'))) return 2
+  if (s.includes('claude') || s.includes('gpt')) return 3
+  if (s.includes('5h') || s.includes('five')) return 4
+  if (s.includes('weekly') || s.includes('week') || s.includes('7d')) return 5
+  return 6
 }
 
 /** antigravity: cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary（分组配额池） */
@@ -438,30 +441,45 @@ function parseAntigravityQuota(body) {
       }
     }
   } else if (body?.models && typeof body.models === 'object') {
-    const priorityKeys = [
-      ['gemini-3-pro', 'Gemini 3 Pro'],
-      ['claude', 'Claude Sonnet'],
-      ['gemini-3-flash', 'Gemini 3 Flash'],
-      ['gemini-2.5-pro', 'Gemini 2.5 Pro'],
-    ]
-    const entries = Object.entries(body.models)
-    for (const [keyPattern, displayLabel] of priorityKeys) {
-      const match = entries.find(([name]) => name.toLowerCase().includes(keyPattern))
-      if (match) {
-        const [, info] = match
-        const q = info?.quotaInfo
-        if (q && q.remainingFraction !== undefined && q.remainingFraction !== null) {
-          const frac = Number(q.remainingFraction)
-          const pct = Number.isFinite(frac) ? Math.max(0, Math.min(100, Math.round(frac * 100))) : null
-          const resetAt = q.resetTime ? Date.parse(q.resetTime) : NaN
-          windows.push({
-            label: info.displayName || displayLabel,
+    const poolMap = new Map()
+    for (const [modelId, info] of Object.entries(body.models)) {
+      const id = modelId.toLowerCase()
+      const q = info?.quotaInfo
+      if (!q || q.remainingFraction === undefined || q.remainingFraction === null) continue
+      const frac = Number(q.remainingFraction)
+      const pct = Number.isFinite(frac) ? Math.max(0, Math.min(100, Math.round(frac * 100))) : null
+      const resetAt = q.resetTime ? Date.parse(q.resetTime) : NaN
+
+      let isShort = false
+      if (!Number.isNaN(resetAt)) {
+        const diffMs = resetAt - Date.now()
+        isShort = diffMs > 0 && diffMs <= 12 * 3600 * 1000
+      } else {
+        isShort = id.includes('pro') && !id.includes('flash')
+      }
+
+      let group = null
+      if (id.includes('gemini')) {
+        group = 'Gemini'
+      } else if (id.includes('claude') || id.includes('gpt')) {
+        group = 'Claude/GPT'
+      }
+
+      if (group) {
+        const winLabel = isShort ? '5h' : 'Weekly'
+        const poolKey = `${group} · ${winLabel}`
+        const existing = poolMap.get(poolKey)
+        if (!existing || (pct !== null && (existing.remainingPct === null || pct < existing.remainingPct))) {
+          poolMap.set(poolKey, {
+            label: poolKey,
             remainingPct: pct,
             resetAt: Number.isNaN(resetAt) ? null : resetAt,
           })
         }
       }
     }
+    const sortedPools = Array.from(poolMap.values()).sort((a, b) => windowSortWeight(a.label) - windowSortWeight(b.label))
+    windows.push(...sortedPools)
   }
   let plan = null
   if (typeof body?.tier === 'string') plan = body.tier
@@ -486,59 +504,67 @@ function cleanPlanName(name) {
   return cleaned || raw
 }
 
-/** loadCodeAssist: 探测 Antigravity 账号的订阅套餐 (paidTier / currentTier / allowedTiers) */
+/** loadCodeAssist: 探测 Antigravity 账号的订阅套餐 (paidTier / currentTier / allowedTiers) 与项目 ID */
 function parseAntigravityPlan(body) {
-  if (!body || typeof body !== 'object') return null
+  if (!body || typeof body !== 'object') return { plan: null, projectId: null }
+
+  const projectId = typeof body.cloudaicompanionProject === 'string' ? body.cloudaicompanionProject.trim() : null
+  let plan = null
 
   // 1. paidTier (如 Google One AI Premium / Gemini Advanced / Pro)
   const paidTier = body.paidTier
   if (paidTier && typeof paidTier === 'object') {
     const name = typeof paidTier.name === 'string' ? paidTier.name.trim() : ''
     const id = typeof paidTier.id === 'string' ? paidTier.id.trim() : ''
-    if (name) return cleanPlanName(name)
-    if (id) return cleanPlanName(id)
+    if (name) plan = cleanPlanName(name)
+    else if (id) plan = cleanPlanName(id)
   }
 
   // 2. 检查 ineligibleTiers (是否属于受限/未授权区域)
   const hasIneligible = Array.isArray(body.ineligibleTiers) && body.ineligibleTiers.length > 0
 
   // 3. currentTier
-  const currentTier = body.currentTier
-  if (currentTier && typeof currentTier === 'object') {
-    const name = typeof currentTier.name === 'string' ? currentTier.name.trim() : ''
-    const id = typeof currentTier.id === 'string' ? currentTier.id.trim() : ''
-    if (!hasIneligible) {
-      if (name) return cleanPlanName(name)
-      if (id === 'standard-tier') return 'Pro'
-      if (id === 'free-tier') return 'Free'
-      if (id === 'legacy-tier') return 'Legacy'
-      if (id) return cleanPlanName(id)
+  if (!plan) {
+    const currentTier = body.currentTier
+    if (currentTier && typeof currentTier === 'object') {
+      const name = typeof currentTier.name === 'string' ? currentTier.name.trim() : ''
+      const id = typeof currentTier.id === 'string' ? currentTier.id.trim() : ''
+      if (!hasIneligible) {
+        if (name) plan = cleanPlanName(name)
+        else if (id === 'standard-tier') plan = 'Pro'
+        else if (id === 'free-tier') plan = 'Free'
+        else if (id === 'legacy-tier') plan = 'Legacy'
+        else if (id) plan = cleanPlanName(id)
+      }
     }
   }
 
   // 4. allowedTiers
-  if (Array.isArray(body.allowedTiers) && body.allowedTiers.length > 0) {
+  if (!plan && Array.isArray(body.allowedTiers) && body.allowedTiers.length > 0) {
     const defaultTier = body.allowedTiers.find((t) => t?.is_default === true) || body.allowedTiers[0]
     if (defaultTier) {
       const name = defaultTier.name || defaultTier.id
-      if (name) return hasIneligible ? `${cleanPlanName(name)} (Restricted)` : cleanPlanName(name)
+      if (name) plan = hasIneligible ? `${cleanPlanName(name)} (Restricted)` : cleanPlanName(name)
     }
   }
 
   // 5. fallback tier
-  if (typeof body.tier === 'string' && body.tier.trim()) return cleanPlanName(body.tier)
+  if (!plan && typeof body.tier === 'string' && body.tier.trim()) plan = cleanPlanName(body.tier)
 
-  return null
+  return { plan, projectId }
 }
 
 const PLAN_PROBES = {
   antigravity: {
-    url: 'https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist',
+    urls: [
+      'https://daily-cloudcode-pa.googleapis.com/v1internal:loadCodeAssist',
+      'https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist',
+    ],
     method: 'POST',
     header: {
       Authorization: 'Bearer $TOKEN$',
       'Content-Type': 'application/json',
-      'User-Agent': 'antigravity/1.0.0',
+      'User-Agent': 'antigravity/cli/1.0.13 (aidev_client; os_type=darwin; arch=arm64)',
     },
     body: { metadata: { ideType: 'ANTIGRAVITY' } },
     parse: parseAntigravityPlan,
@@ -572,22 +598,29 @@ const QUOTA_PROBES = {
     parse: parseXaiQuota,
   },
   antigravity: {
-    url: 'https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary',
-    fallbackUrl: 'https://cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels',
+    urls: [
+      'https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary',
+      'https://daily-cloudcode-pa.sandbox.googleapis.com/v1internal:retrieveUserQuotaSummary',
+      'https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary',
+      'https://daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels',
+      'https://cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels',
+    ],
     method: 'POST',
     header: {
       Authorization: 'Bearer $TOKEN$',
       'Content-Type': 'application/json',
-      'User-Agent': 'antigravity/1.0.0',
+      'User-Agent': 'antigravity/cli/1.0.13 (aidev_client; os_type=darwin; arch=arm64)',
     },
     body: {},
     parse: parseAntigravityQuota,
   },
 }
 
-/** POST /v0/management/api-call 配额探针；支持 fallbackUrl 降级重试；只回白名单解析结果。 */
-async function probeQuota(baseUrl, key, authIndex, probe) {
-  const urlsToTry = [probe.url, probe.fallbackUrl].filter(Boolean)
+/** POST /v0/management/api-call 配额探针；支持 urls 降级重试；只回白名单解析结果。 */
+async function probeQuota(baseUrl, key, authIndex, probe, extraBody = null) {
+  const urlsToTry = Array.isArray(probe.urls) && probe.urls.length > 0
+    ? probe.urls
+    : [probe.url, probe.fallbackUrl].filter(Boolean)
   let lastError = null
 
   for (const targetUrl of urlsToTry) {
@@ -600,8 +633,11 @@ async function probeQuota(baseUrl, key, authIndex, probe) {
         url: targetUrl,
         header: probe.header,
       }
-      if (probe.body !== undefined) {
-        payload.body = typeof probe.body === 'string' ? probe.body : JSON.stringify(probe.body)
+      const rawBody = extraBody !== null ? extraBody : (probe.body ?? {})
+      if (rawBody !== undefined) {
+        const bodyStr = typeof rawBody === 'string' ? rawBody : JSON.stringify(rawBody)
+        payload.data = bodyStr
+        payload.body = bodyStr
       }
       const res = await fetch(mgmtUrl(baseUrl, '/api-call'), {
         method: 'POST',
@@ -638,7 +674,9 @@ async function probeQuota(baseUrl, key, authIndex, probe) {
         continue
       }
       const parsed = probe.parse(body)
-      return { ok: true, quota: parsed }
+      if (parsed && (Array.isArray(parsed.windows) && parsed.windows.length > 0 || parsed.plan || parsed.projectId)) {
+        return { ok: true, quota: parsed }
+      }
     } catch (error) {
       lastError = String(error?.message ?? error)
     } finally {
@@ -734,23 +772,27 @@ export function apply(ctx) {
     if (!force && cached && Date.now() - cached.at < QUOTA_CACHE_TTL_MS) return cached.data
 
     const planProbe = PLAN_PROBES[provider]
-    const planPromise = planProbe
-      ? probeQuota(baseUrl, key, authIndex, planProbe).then((res) => (res.ok ? res.quota : null)).catch(() => null)
-      : Promise.resolve(null)
+    let plan = null
+    let projectId = String(file?.project_id ?? file?.projectId ?? '').trim() || null
+    if (planProbe) {
+      const pRes = await probeQuota(baseUrl, key, authIndex, planProbe).catch(() => null)
+      if (pRes?.ok && pRes.quota) {
+        plan = pRes.quota.plan ?? null
+        if (!projectId) projectId = pRes.quota.projectId ?? null
+      }
+    }
 
-    const [quotaRes, planRes] = await Promise.all([
-      probeQuota(baseUrl, key, authIndex, probe),
-      planPromise,
-    ])
+    const extraQuotaBody = projectId ? { project: projectId } : {}
+    const quotaRes = await probeQuota(baseUrl, key, authIndex, probe, extraQuotaBody)
 
-    const plan = planRes ?? (quotaRes.ok ? quotaRes.quota.plan : null)
+    const resolvedPlan = plan ?? (quotaRes.ok ? quotaRes.quota.plan : null)
     const data = quotaRes.ok
-      ? { supported: true, windows: quotaRes.quota.windows, plan, error: null }
+      ? { supported: true, windows: quotaRes.quota.windows, plan: resolvedPlan, error: null }
       : {
           supported: true,
           windows: [],
-          plan,
-          error: plan ? `${quotaRes.message}（若为新账号，请先发起一次对话以完成初始化）` : quotaRes.message,
+          plan: resolvedPlan,
+          error: resolvedPlan ? `${quotaRes.message}（若为新账号，请先发起一次对话以完成初始化）` : quotaRes.message,
         }
     quotaCache.set(authIndex, { at: Date.now(), data })
     return data
