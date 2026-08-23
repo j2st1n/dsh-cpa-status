@@ -359,13 +359,26 @@ function formatAntigravityWindow(window, displayName, bucketId) {
   return window || displayName || '窗口'
 }
 
+function windowSortWeight(label) {
+  const s = String(label ?? '').toLowerCase()
+  if (s.includes('5h') || s.includes('five')) return 0
+  if (s.includes('1d') || s.includes('day') || s.includes('24h')) return 1
+  if (s.includes('weekly') || s.includes('week') || s.includes('7d')) return 2
+  return 3
+}
+
 /** antigravity: cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary（分组配额池） */
 function parseAntigravityQuota(body) {
   const windows = []
   if (Array.isArray(body?.groups) && body.groups.length > 0) {
     for (const g of body.groups) {
       const groupLabel = formatAntigravityGroup(g.displayName)
-      for (const b of Array.isArray(g.buckets) ? g.buckets : []) {
+      const sortedBuckets = (Array.isArray(g.buckets) ? [...g.buckets] : []).sort((a, b) => {
+        const la = formatAntigravityWindow(a.window, a.displayName, a.bucketId)
+        const lb = formatAntigravityWindow(b.window, b.displayName, b.bucketId)
+        return windowSortWeight(la) - windowSortWeight(lb)
+      })
+      for (const b of sortedBuckets) {
         const frac = Number(b.remainingFraction)
         const pct = Number.isFinite(frac) ? Math.max(0, Math.min(100, Math.round(frac * 100))) : null
         const winLabel = formatAntigravityWindow(b.window, b.displayName, b.bucketId)
