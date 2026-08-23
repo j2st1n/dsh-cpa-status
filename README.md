@@ -20,11 +20,11 @@
 
 `dsh plugin add` 会自动完成依赖链接与 profile 注册，装完重启 `dsh web` 生效。卸载：`dsh plugin --profile web remove dsh-cpa-status`。
 
-**方式一：GitHub 直装（推荐）**
+- **方式一：GitHub 直装（推荐）**
 
 ```sh
-dsh plugin --profile web add github:xohmai/dsh-cpa-status
-# 锁定版本更安全：github:xohmai/dsh-cpa-status#<commit-sha>
+dsh plugin --profile web add github:j2st1n/dsh-cpa-status
+# 锁定版本更安全：github:j2st1n/dsh-cpa-status#<commit-sha>
 ```
 
 本插件零构建（纯 JS，无 TypeScript / 无打包步骤），git 安装不会踩「源码拉下来没跑 build」的坑，也无需 pnpm allowBuilds 授权。
