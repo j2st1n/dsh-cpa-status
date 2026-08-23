@@ -1,39 +1,55 @@
 # dsh-cpa-status
 
-[CLIProxyAPI（CPA）](https://github.com/router-for-me/CLIProxyAPI) 的 DeepSeek Harness 状态面板插件：侧栏常驻状态灯，点开即看账号池配额、健康与流量——不用每次开 CPA 管理页。
+[CLIProxyAPI（CPA）](https://github.com/router-for-me/CLIProxyAPI) 的 DeepSeek Harness (DSH) 状态面板插件：侧栏常驻状态灯，点开即看账号池配额、健康与流量——不用每次开 CPA 管理页。
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/xohmai/dsh-cpa-status/main/docs/images/panel.png" alt="状态面板" width="820">
 </p>
 
-- **收起态**：`● CPA · 3/3 账号 · 28 次/30min`，成功率异常或账号缺员时自动变色告警
-- **账号卡**：套餐徽章（含订阅剩余天数）、指标宫格（请求总数 / 成功率 / 近 30 分钟）、健康刻度带（约 3.3 小时逐 10 分钟成败）、配额进度条（剩余 % + 重置倒计时）
-- **AI 供应商页**：api-key 网关列表（类型 / 地址 / 模型 / 密钥末四位 / 启停），与认证文件分页签切换
-- **配额手动同步**：点「同步配额」才探测上游（codex / kimi / xai 已实测），平时只读 CPA 本地数据
-- **非侵入**：不碰 usage 队列、不写 CPA 数据；密钥仅存本机凭据库，网关密钥只显示末四位
+## 功能特性
+
+- **极简常驻态**：单行自适应状态胶囊（`● CPA · 3/3 账号 · 28 次/30min`），健康时低调克制，成功率异常或账号缺员时自动变色告警，默认不打扰。
+- **账号池卡片**：
+  - **套餐徽章**：支持识别 `Pro`、`Plus`、`Free` 等套餐等级及订阅剩余天数；
+  - **多模型分组配额池**：已适配 **Antigravity（Gemini / Claude 组 5h 与周限额）**、**Codex**、**Kimi**、**xAI** 等上游配额探针；
+  - **监控指标宫格**：实时展示请求总数、成功率、近 30 分钟流量；
+  - **健康刻度带**：约 3.3 小时（逐 10 分钟桶）成败刻度，直观排查限流与故障。
+- **AI 供应商页**：支持查看 api-key 供应商网关列表（类型 / 地址 / 模型 / 密钥末四位 / 启停状态），与 OAuth 认证文件分页签快速切换。
+- **平滑交互体验**：浮层面板智能定位，点击外部任意空白区域自动收起，用完即走。
+- **手动配额同步**：平时仅读取 CPA 本地数据，点击「同步配额」才触发上游探针，对上游与网关完全非侵入。
+- **企业级安全**：管理密钥仅存本机凭据库；网关密钥只显示末四位；支持一键开启「脱敏模式」打码邮箱与地址。
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/xohmai/dsh-cpa-status/main/docs/images/collapsed.png" alt="侧栏底部收起态">
 </p>
 
+## 配额与探针支持
+
+| 供应商 / 账号类型 | 流量与健康刻度 | 额度进度条 | 支持的配额维度 | 套餐徽章 |
+| :--- | :---: | :---: | :--- | :---: |
+| **Antigravity** (Google) | ✅ | ✅ | **Gemini 组** (5h / Weekly)<br>**Claude/GPT 组** (5h / Weekly) | ✅ (Pro / Free) |
+| **Codex** (ChatGPT) | ✅ | ✅ | 5h 滑动窗口、Weekly、模型配额 | ✅ (Free / Plus / Team) |
+| **Kimi** (Moonshot) | ✅ | ✅ | Weekly、周期用量 | ✅ (Tier / Level) |
+| **xAI** (Grok) | ✅ | ✅ | Period、按量付费 (On-demand) | ➖ |
+
 ## 安装
 
 `dsh plugin add` 会自动完成依赖链接与 profile 注册，装完重启 `dsh web` 生效。卸载：`dsh plugin --profile web remove dsh-cpa-status`。
 
-- **方式一：GitHub 直装（推荐）**
+### 方式一：GitHub 直装（推荐）
 
 ```sh
 dsh plugin --profile web add github:j2st1n/dsh-cpa-status
-# 锁定版本更安全：github:j2st1n/dsh-cpa-status#<commit-sha>
+# 锁定版本：github:j2st1n/dsh-cpa-status#<commit-sha>
 ```
 
-本插件零构建（纯 JS，无 TypeScript / 无打包步骤），git 安装不会踩「源码拉下来没跑 build」的坑，也无需 pnpm allowBuilds 授权。
+> 本插件为**纯原生 JS 零构建（Zero-build）**架构，无打包与编译步骤，git 安装开箱即用。
 
-**方式二：tarball 离线分发（内网场景）**
+### 方式二：tarball 离线分发（内网/离线场景）
 
 ```sh
-npm pack                                             # 产出 dsh-cpa-status-0.1.0.tgz（约 31 kB / 6 个文件）
-dsh plugin --profile web add ./dsh-cpa-status-0.1.0.tgz
+npm pack --cache /tmp/npm-cache                      # 产出 dsh-cpa-status-0.1.1.tgz
+dsh plugin --profile web add ./dsh-cpa-status-0.1.1.tgz
 ```
 
 ## 配置
@@ -43,15 +59,16 @@ dsh plugin --profile web add ./dsh-cpa-status-0.1.0.tgz
 - **Base URL**：CPA 地址，如 `http://127.0.0.1:8317`；反代场景填到子路径根（`https://example.com/abc123`）
 - **Management Key**：CPA 管理密钥，仅存本机凭据库
 
-Public URL 可选（「管理页 ↗」外链，默认 `{Base URL}/management.html`）。亦可用环境变量 `CPA_BASE_URL` / `CPA_MANAGEMENT_KEY` 预置（env 注入时表单密钥只读）。
+**可选配置**：
+- **Public URL**：「管理页 ↗」外链，默认 `{Base URL}/management.html`（适用于内网反代至公网域名的跳转场景）。
+- **环境变量预置**：支持通过环境变量 `CPA_BASE_URL` / `CPA_MANAGEMENT_KEY` 预先注入（env 注入时 Web 表单密钥为只读保护）。
 
-## 安全
+## 安全声明
 
-- Management Key 只写入本机凭据库，接口响应不回传完整密钥
-- 账号/网关字段白名单返回；网关密钥仅显示末四位
-- 面板可开脱敏模式，进一步打码邮箱、地址与名称
-
-详见 [SECURITY.md](./SECURITY.md)。
+- Management Key 只写入宿主凭据库，接口响应绝不回传完整明文密钥；
+- 账号/网关字段白名单过滤返回；网关密钥仅展示末四位；
+- 支持开启脱敏模式（Privacy Mode），自动对邮箱、地址与账号名称进行打码掩码；
+- 详细安全机制参见 [SECURITY.md](./SECURITY.md)。
 
 ## 致谢
 
@@ -59,4 +76,4 @@ Public URL 可选（「管理页 ↗」外链，默认 `{Base URL}/management.ht
 
 ## License
 
-Apache-2.0
+[Apache-2.0](./LICENSE)
