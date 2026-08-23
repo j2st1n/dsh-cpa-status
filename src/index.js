@@ -342,6 +342,74 @@ function parseXaiQuota(body) {
   return { plan: null, windows }
 }
 
+function formatAntigravityGroup(name) {
+  const s = String(name ?? '').toUpperCase()
+  if (s.includes('GEMINI')) return 'Gemini'
+  if (s.includes('CLAUDE') && s.includes('GPT')) return 'Claude/GPT'
+  if (s.includes('CLAUDE')) return 'Claude'
+  if (s.includes('GPT')) return 'GPT'
+  return String(name ?? '模型组').replace(/模型/g, '').trim() || '通用'
+}
+
+function formatAntigravityWindow(window, displayName, bucketId) {
+  const s = `${window ?? ''} ${displayName ?? ''} ${bucketId ?? ''}`.toLowerCase()
+  if (s.includes('five') || s.includes('5h') || s.includes('5_hour') || s.includes('5-hour')) return '5h'
+  if (s.includes('week') || s.includes('7d')) return 'Weekly'
+  if (s.includes('day') || s.includes('24h') || s.includes('1d')) return '1d'
+  return window || displayName || '窗口'
+}
+
+/** antigravity: cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary（分组配额池） */
+function parseAntigravityQuota(body) {
+  const windows = []
+  if (Array.isArray(body?.groups) && body.groups.length > 0) {
+    for (const g of body.groups) {
+      const groupLabel = formatAntigravityGroup(g.displayName)
+      for (const b of Array.isArray(g.buckets) ? g.buckets : []) {
+        const frac = Number(b.remainingFraction)
+        const pct = Number.isFinite(frac) ? Math.max(0, Math.min(100, Math.round(frac * 100))) : null
+        const winLabel = formatAntigravityWindow(b.window, b.displayName, b.bucketId)
+        const resetAt = b.resetTime ? Date.parse(b.resetTime) : NaN
+        windows.push({
+          label: `${groupLabel} · ${winLabel}`,
+          remainingPct: pct,
+          resetAt: Number.isNaN(resetAt) ? null : resetAt,
+        })
+      }
+    }
+  } else if (body?.models && typeof body.models === 'object') {
+    const priorityKeys = [
+      ['gemini-3-pro', 'Gemini 3 Pro'],
+      ['claude', 'Claude Sonnet'],
+      ['gemini-3-flash', 'Gemini 3 Flash'],
+      ['gemini-2.5-pro', 'Gemini 2.5 Pro'],
+    ]
+    const entries = Object.entries(body.models)
+    for (const [keyPattern, displayLabel] of priorityKeys) {
+      const match = entries.find(([name]) => name.toLowerCase().includes(keyPattern))
+      if (match) {
+        const [, info] = match
+        const q = info?.quotaInfo
+        if (q && q.remainingFraction !== undefined && q.remainingFraction !== null) {
+          const frac = Number(q.remainingFraction)
+          const pct = Number.isFinite(frac) ? Math.max(0, Math.min(100, Math.round(frac * 100))) : null
+          const resetAt = q.resetTime ? Date.parse(q.resetTime) : NaN
+          windows.push({
+            label: info.displayName || displayLabel,
+            remainingPct: pct,
+            resetAt: Number.isNaN(resetAt) ? null : resetAt,
+          })
+        }
+      }
+    }
+  }
+  let plan = null
+  if (typeof body?.tier === 'string') plan = body.tier
+  else if (typeof body?.currentTier?.name === 'string') plan = body.currentTier.name
+  else if (typeof body?.paidTier?.name === 'string') plan = body.paidTier.name
+  return { plan, windows }
+}
+
 const QUOTA_PROBES = {
   codex: {
     url: 'https://chatgpt.com/backend-api/wham/usage',
@@ -368,6 +436,17 @@ const QUOTA_PROBES = {
     },
     parse: parseXaiQuota,
   },
+  antigravity: {
+    url: 'https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary',
+    method: 'POST',
+    header: {
+      Authorization: 'Bearer $TOKEN$',
+      'Content-Type': 'application/json',
+      'User-Agent': 'antigravity/1.0.0',
+    },
+    body: {},
+    parse: parseAntigravityQuota,
+  },
 }
 
 /** POST /v0/management/api-call 配额探针；只回白名单解析结果，绝不回传上游原始 body。 */
@@ -375,10 +454,19 @@ async function probeQuota(baseUrl, key, authIndex, probe) {
   const ctrl = new AbortController()
   const timer = setTimeout(() => ctrl.abort(), REQUEST_TIMEOUT_MS)
   try {
+    const payload = {
+      authIndex,
+      method: probe.method || 'GET',
+      url: probe.url,
+      header: probe.header,
+    }
+    if (probe.body !== undefined) {
+      payload.body = typeof probe.body === 'string' ? probe.body : JSON.stringify(probe.body)
+    }
     const res = await fetch(mgmtUrl(baseUrl, '/api-call'), {
       method: 'POST',
       headers: { authorization: `Bearer ${key}`, 'content-type': 'application/json' },
-      body: JSON.stringify({ authIndex, method: 'GET', url: probe.url, header: probe.header }),
+      body: JSON.stringify(payload),
       signal: ctrl.signal,
     })
     if (res.status === 401 || res.status === 403) return { ok: false, message: '管理密钥无效' }
@@ -418,15 +506,18 @@ async function mapPool(items, limit, fn) {
   return out
 }
 
-/** codex 账号的 id_token → 套餐徽章（类型 + 订阅剩余天数）。 */
+/** codex / antigravity 等账号的 id_token 或 auth-file → 套餐徽章（类型 + 订阅剩余天数）。 */
 function planFromIdToken(file) {
   const token = file?.id_token
-  if (!token || typeof token !== 'object') return null
-  const type = typeof token.plan_type === 'string' ? token.plan_type : null
-  const until = token.chatgpt_subscription_active_until ? Date.parse(token.chatgpt_subscription_active_until) : NaN
-  const daysLeft = Number.isNaN(until) ? null : Math.max(0, Math.ceil((until - Date.now()) / 86_400_000))
-  if (!type && daysLeft === null) return null
-  return { type, daysLeft }
+  if (token && typeof token === 'object') {
+    const type = typeof token.plan_type === 'string' ? token.plan_type : null
+    const until = token.chatgpt_subscription_active_until ? Date.parse(token.chatgpt_subscription_active_until) : NaN
+    const daysLeft = Number.isNaN(until) ? null : Math.max(0, Math.ceil((until - Date.now()) / 86_400_000))
+    if (type || daysLeft !== null) return { type, daysLeft }
+  }
+  const directPlan = typeof file?.plan === 'string' ? file.plan : typeof file?.tier === 'string' ? file.tier : null
+  if (directPlan) return { type: directPlan, daysLeft: null }
+  return null
 }
 
 // ---------------------------------------------------------------------------

@@ -499,7 +499,17 @@ window.__ModuleLoader__.load({
             : h('span', null, text)
       return h(
         'button',
-        { className: 'cpa-btn', style: btnBase, onClick: toggleOverlay, title },
+        {
+          className: 'cpa-btn cpa-footer-btn',
+          style: {
+            ...btnBase,
+            width: props?.wide === false ? undefined : '100%',
+            justifyContent: props?.wide === false ? 'center' : 'flex-start',
+            margin: '2px 0',
+          },
+          onClick: toggleOverlay,
+          title,
+        },
         h('span', { className: color === T.ok ? 'cpa-dot-live' : undefined, style: dotStyle(color) }),
         labelEl,
       )
@@ -1004,6 +1014,7 @@ window.__ModuleLoader__.load({
     // ---------- Overlay 面板 ----------
     function OverlayPanel() {
       const state = useStore()
+      const panelRef = React.useRef(null)
       // 相位机：closed → open → closing（播完退场动画）→ closed。
       // 拆成两个 effect：若合并在一个依赖 [open, phase] 的 effect 里，phase 变 closing 触发重跑时
       // React 会先执行上一次 cleanup，把「170ms 后置 closed」的定时器清掉——面板卡死在
@@ -1018,6 +1029,20 @@ window.__ModuleLoader__.load({
         const timer = setTimeout(() => setPhase('closed'), 170)
         return () => clearTimeout(timer)
       }, [phase])
+
+      // 点击外部区域时自动收起面板
+      useEffect(() => {
+        if (!state.open) return
+        const handleClickOutside = (e) => {
+          if (panelRef.current && !panelRef.current.contains(e.target)) {
+            const isBtn = e.target.closest && e.target.closest('.cpa-footer-btn')
+            if (!isBtn) store.set({ open: false, editing: false })
+          }
+        }
+        window.addEventListener('mousedown', handleClickOutside)
+        return () => window.removeEventListener('mousedown', handleClickOutside)
+      }, [state.open])
+
       if (phase === 'closed') return null
       const st = state.status
       const showConfig = state.editing || !st || st.mode === 'needs_config'
@@ -1026,15 +1051,16 @@ window.__ModuleLoader__.load({
       return h(
         'div',
         {
+          ref: panelRef,
           className: phase === 'closing' ? 'cpa-panel-exit' : 'cpa-panel-enter',
           style: {
             position: 'fixed',
             left: 12,
-            bottom: 52,
+            bottom: 140, // 避开侧栏底部的 OpenCode 控件与触发按钮
             width: 380,
             // ready 态面板高度固定：Tab 内容量差异再大，切换也不抖动；配置/异常态内容短，自适应即可
-            height: ready ? 'min(640px, 72vh)' : undefined,
-            maxHeight: '72vh',
+            height: ready ? 'min(560px, calc(100vh - 165px))' : undefined,
+            maxHeight: 'calc(100vh - 165px)',
             overflow: 'hidden',
             display: 'flex',
             flexDirection: 'column',
