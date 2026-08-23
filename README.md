@@ -53,6 +53,10 @@ Public URL 可选（「管理页 ↗」外链，默认 `{Base URL}/management.ht
 
 详见 [SECURITY.md](./SECURITY.md)。
 
+## 致谢
+
+本项目基于 [xohmai/dsh-cpa-status](https://github.com/xohmai/dsh-cpa-status) 进行功能扩展与布局优化，遵循 Apache-2.0 协议开源。
+
 ## License
 
 Apache-2.0
