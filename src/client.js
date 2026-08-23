@@ -1056,11 +1056,11 @@ window.__ModuleLoader__.load({
           style: {
             position: 'fixed',
             left: 12,
-            bottom: 140, // 避开侧栏底部的 OpenCode 控件与触发按钮
+            bottom: 78, // 悬浮于侧栏底部紧凑胶囊按钮的正上方
             width: 380,
             // ready 态面板高度固定：Tab 内容量差异再大，切换也不抖动；配置/异常态内容短，自适应即可
-            height: ready ? 'min(560px, calc(100vh - 165px))' : undefined,
-            maxHeight: 'calc(100vh - 165px)',
+            height: ready ? 'min(580px, calc(100vh - 100px))' : undefined,
+            maxHeight: 'calc(100vh - 100px)',
             overflow: 'hidden',
             display: 'flex',
             flexDirection: 'column',
