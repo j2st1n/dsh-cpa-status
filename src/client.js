@@ -20,6 +20,7 @@ window.__ModuleLoader__.load({
 
     // ---------- 动画与交互样式（注入 <style>，随插件停止移除） ----------
     const CSS = `
+      div[class*="footerActions"] { display: flex !important; flex-direction: column !important; gap: 4px !important; width: 100% !important; }
       @keyframes cpaFadeSlideUp { from { opacity: 0; transform: translateY(10px) scale(.98) } to { opacity: 1; transform: translateY(0) scale(1) } }
       @keyframes cpaFadeSlideDown { from { opacity: 1; transform: translateY(0) scale(1) } to { opacity: 0; transform: translateY(10px) scale(.98) } }
       @keyframes cpaFadeIn { from { opacity: 0; transform: translateY(4px) } to { opacity: 1; transform: translateY(0) } }
@@ -29,7 +30,7 @@ window.__ModuleLoader__.load({
       .cpa-panel-enter { animation: cpaFadeSlideUp .2s cubic-bezier(.2,.9,.3,1.2) both }
       .cpa-panel-exit { animation: cpaFadeSlideDown .16s ease-in both; pointer-events: none !important }
       .cpa-card { animation: cpaFadeIn .25s ease-out both }
-      .cpa-btn { transition: background .15s ease, border-color .15s ease, color .15s ease, transform .1s ease, opacity .15s ease, filter .15s ease }
+      .cpa-btn { min-width: 0; transition: background .15s ease, border-color .15s ease, color .15s ease, transform .1s ease, opacity .15s ease, filter .15s ease }
       .cpa-btn:hover:not(:disabled):not(.cpa-btn-primary) { background: var(--dsw-alias-interactive-bg-hover, var(--dsw-alias-bg-layer-1)); border-color: var(--dsw-alias-border-l2) }
       .cpa-btn-primary:hover:not(:disabled) { filter: brightness(1.12) }
       .cpa-tab { transition: background .15s ease, color .15s ease }
@@ -486,17 +487,17 @@ window.__ModuleLoader__.load({
           : segments
             ? h(
                 'span',
-                { style: { display: 'inline-flex', alignItems: 'baseline', whiteSpace: 'nowrap' } },
+                { style: { display: 'inline-flex', alignItems: 'baseline', whiteSpace: 'nowrap', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' } },
                 segments.flatMap((s, i) =>
                   i === 0
-                    ? [h('span', { key: `s${i}`, style: { color: s.color } }, s.text)]
+                    ? [h('span', { key: `s${i}`, style: { color: s.color, flexShrink: 0 } }, s.text)]
                     : [
-                        h('span', { key: `sep${i}`, style: { color: T.secondary, margin: '0 5px', opacity: 0.7 } }, '·'),
-                        h('span', { key: `s${i}`, style: { color: s.color, fontVariantNumeric: 'tabular-nums' } }, s.text),
+                        h('span', { key: `sep${i}`, style: { color: T.secondary, margin: '0 5px', opacity: 0.7, flexShrink: 0 } }, '·'),
+                        h('span', { key: `s${i}`, style: { color: s.color, fontVariantNumeric: 'tabular-nums', overflow: 'hidden', textOverflow: 'ellipsis' } }, s.text),
                       ],
                 ),
               )
-            : h('span', null, text)
+            : h('span', { style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, text)
       return h(
         'button',
         {
@@ -508,6 +509,8 @@ window.__ModuleLoader__.load({
             boxSizing: 'border-box',
             justifyContent: props?.wide === false ? 'center' : 'flex-start',
             margin: '2px 0',
+            minWidth: 0,
+            flexShrink: 0,
           },
           onClick: toggleOverlay,
           title,
