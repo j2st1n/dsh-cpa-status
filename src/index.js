@@ -470,6 +470,65 @@ function parseAntigravityQuota(body) {
   return { plan, windows }
 }
 
+/** loadCodeAssist: 探测 Antigravity 账号的订阅套餐 (paidTier / currentTier / allowedTiers) */
+function parseAntigravityPlan(body) {
+  if (!body || typeof body !== 'object') return null
+
+  // 1. paidTier (如 Google One AI Premium / Gemini Advanced / Pro)
+  const paidTier = body.paidTier
+  if (paidTier && typeof paidTier === 'object') {
+    const name = typeof paidTier.name === 'string' ? paidTier.name.trim() : ''
+    const id = typeof paidTier.id === 'string' ? paidTier.id.trim() : ''
+    if (name) return name
+    if (id) return id
+  }
+
+  // 2. 检查 ineligibleTiers (是否属于受限/未授权区域)
+  const hasIneligible = Array.isArray(body.ineligibleTiers) && body.ineligibleTiers.length > 0
+
+  // 3. currentTier
+  const currentTier = body.currentTier
+  if (currentTier && typeof currentTier === 'object') {
+    const name = typeof currentTier.name === 'string' ? currentTier.name.trim() : ''
+    const id = typeof currentTier.id === 'string' ? currentTier.id.trim() : ''
+    if (!hasIneligible) {
+      if (name) return name
+      if (id === 'standard-tier') return 'Pro'
+      if (id === 'free-tier') return 'Free'
+      if (id === 'legacy-tier') return 'Legacy'
+      if (id) return id
+    }
+  }
+
+  // 4. allowedTiers
+  if (Array.isArray(body.allowedTiers) && body.allowedTiers.length > 0) {
+    const defaultTier = body.allowedTiers.find((t) => t?.is_default === true) || body.allowedTiers[0]
+    if (defaultTier) {
+      const name = defaultTier.name || defaultTier.id
+      if (name) return hasIneligible ? `${name} (Restricted)` : name
+    }
+  }
+
+  // 5. fallback tier
+  if (typeof body.tier === 'string' && body.tier.trim()) return body.tier.trim()
+
+  return null
+}
+
+const PLAN_PROBES = {
+  antigravity: {
+    url: 'https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist',
+    method: 'POST',
+    header: {
+      Authorization: 'Bearer $TOKEN$',
+      'Content-Type': 'application/json',
+      'User-Agent': 'antigravity/1.0.0',
+    },
+    body: { metadata: { ideType: 'ANTIGRAVITY' } },
+    parse: parseAntigravityPlan,
+  },
+}
+
 const QUOTA_PROBES = {
   codex: {
     url: 'https://chatgpt.com/backend-api/wham/usage',
@@ -626,7 +685,7 @@ export function apply(ctx) {
     return result
   }
 
-  /** 单账号配额（带缓存；并发控制由调用方保证）。 */
+  /** 单账号配额与套餐（带缓存；并发控制由调用方保证）。 */
   async function quotaForFile(baseUrl, key, file, force) {
     const provider = String(file?.provider ?? file?.type ?? '').toLowerCase()
     const probe = QUOTA_PROBES[provider]
@@ -635,10 +694,21 @@ export function apply(ctx) {
     if (!authIndex) return { supported: true, windows: [], plan: null, error: '缺少 auth_index' }
     const cached = quotaCache.get(authIndex)
     if (!force && cached && Date.now() - cached.at < QUOTA_CACHE_TTL_MS) return cached.data
-    const result = await probeQuota(baseUrl, key, authIndex, probe)
-    const data = result.ok
-      ? { supported: true, windows: result.quota.windows, plan: result.quota.plan, error: null }
-      : { supported: true, windows: [], plan: null, error: result.message }
+
+    const planProbe = PLAN_PROBES[provider]
+    const planPromise = planProbe
+      ? probeQuota(baseUrl, key, authIndex, planProbe).then((res) => (res.ok ? res.quota : null)).catch(() => null)
+      : Promise.resolve(null)
+
+    const [quotaRes, planRes] = await Promise.all([
+      probeQuota(baseUrl, key, authIndex, probe),
+      planPromise,
+    ])
+
+    const plan = planRes ?? (quotaRes.ok ? quotaRes.quota.plan : null)
+    const data = quotaRes.ok
+      ? { supported: true, windows: quotaRes.quota.windows, plan, error: null }
+      : { supported: true, windows: [], plan: planRes ?? null, error: quotaRes.message }
     quotaCache.set(authIndex, { at: Date.now(), data })
     return data
   }

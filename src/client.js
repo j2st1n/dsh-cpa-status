@@ -175,12 +175,12 @@ window.__ModuleLoader__.load({
       const t = String(type ?? '').toLowerCase()
       if (!t) return null
       const base = { fontSize: 10, borderRadius: 4, padding: '1px 6px', flexShrink: 0, fontWeight: 600, letterSpacing: 0.3 }
-      if (t === 'free') return { ...base, color: T.secondary, background: 'transparent', border: `1px solid ${T.border}` }
-      if (['plus', 'intermediate', 'basic', 'standard'].includes(t))
+      if (t === 'free' || t.includes('free')) return { ...base, color: T.secondary, background: 'transparent', border: `1px solid ${T.border}` }
+      if (['plus', 'intermediate', 'basic', 'standard'].includes(t) || t.includes('standard'))
         return { ...base, color: '#fff', background: T.brand, border: `1px solid ${T.brand}` }
-      if (['pro', 'professional', 'advanced'].includes(t))
+      if (['pro', 'professional', 'advanced'].includes(t) || t.includes('pro') || t.includes('premium') || t.includes('advanced'))
         return { ...base, color: '#fff', background: 'linear-gradient(135deg,#7c5cff,#3d7bfd)', border: '1px solid transparent' }
-      if (['team', 'business', 'enterprise', 'max', 'ultra', 'unlimited'].includes(t))
+      if (['team', 'business', 'enterprise', 'max', 'ultra', 'unlimited'].includes(t) || t.includes('enterprise') || t.includes('ultra'))
         return { ...base, color: '#1a1a1a', background: 'linear-gradient(135deg,#f6d365,#e8a33d)', border: '1px solid transparent' }
       return { ...base, color: T.brand, background: 'transparent', border: `1px solid ${T.brand}` }
     }
