@@ -933,7 +933,12 @@ window.__ModuleLoader__.load({
           const result = await api('/api/cpa-status/config', {
             method: 'PUT',
             headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ baseUrl: baseUrl || cfg?.baseUrl || '', privacyMode: state.privacy, clearManagementKey: true }),
+            body: JSON.stringify({
+              baseUrl: cfg?.baseUrl || baseUrl || '',
+              publicUrl: cfg?.publicUrl ?? '',
+              privacyMode: state.privacy,
+              clearManagementKey: true,
+            }),
           })
           store.set({ status: result.status, config: result.config, editing: false, accounts: null })
         } catch (e) {

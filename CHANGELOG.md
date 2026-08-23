@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.6
+
+- 修复清除 Management Key 时意外清空 Public URL 与隐私设置的问题
+- 网关地址响应只保留安全 origin，避免 URL 内嵌凭据泄露
+- 配置请求增加 64 KiB 大小限制，保存后的 CPA 探测合并为单次请求
+- 使用 Public Suffix List 判断可注册域，修复多租户私有后缀误判并完善环回地址识别
+- 增加配置、探测、URL 脱敏和域名匹配回归测试
+
 ## 0.1.5
 
 - 修复 CPA 管理接口 `api-call` 载荷兼容性：支持 `data` 与 `body` 双字段注入及自动提取 `file.project_id`，打通 Google 官方 `daily-cloudcode-pa` 分组配额池（返回真实扣减百分比）

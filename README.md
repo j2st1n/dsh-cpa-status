@@ -42,7 +42,7 @@ dsh plugin --profile web add github:j2st1n/dsh-cpa-status
 
 > **说明**：
 > - 无需指定版本号，默认直接拉取 GitHub 上的**最新版本**（相当于 `@latest`）；
-> - 若需锁定特定稳定版本，可指定 Tag：`dsh plugin --profile web add github:j2st1n/dsh-cpa-status#v0.1.1`；
+> - 若需锁定特定稳定版本，可指定 Tag：`dsh plugin --profile web add github:j2st1n/dsh-cpa-status#v0.1.6`；
 > - 本插件为**纯原生 JS 零构建（Zero-build）**架构，无打包与编译步骤，安装后重启 `dsh web` 即可立即生效。
 
 ### 2. 卸载

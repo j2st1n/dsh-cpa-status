@@ -16,6 +16,7 @@
  * 不代理 api-keys 等返回原始密钥的端点；账号行只回白名单字段。
  */
 import z from '@deepseek-ai/schemastery'
+import { getDomain } from 'tldts'
 
 export const name = 'cpa-status'
 export const inject = ['settings', 'credentials', 'webServer']
@@ -74,23 +75,16 @@ function normalizeForCompare(input) {
   }
 }
 
-/** 提取根域名 / 主机名（支持常见双层顶级域如 .com.cn / .org.cn / .co.uk / .com.hk 等）。 */
+/** 使用 Public Suffix List 提取可注册域；私有后缀（github.io/pages.dev 等）也参与判断。 */
 function extractApexDomain(hostname) {
   if (!hostname || typeof hostname !== 'string') return ''
   const host = hostname.toLowerCase().trim()
-  // IP 形式（IPv4 / IPv6）或无点主机名（localhost 等）不作分段截取
-  if (!host.includes('.') || /^[\d.]+$/.test(host) || host.includes(':')) {
-    return host
-  }
-  const parts = host.split('.')
-  if (parts.length <= 2) return host
-  const secondLevelTlds = new Set(['com', 'edu', 'gov', 'net', 'org', 'co', 'ac'])
-  const tld = parts[parts.length - 1]
-  const sld = parts[parts.length - 2]
-  if (parts.length >= 3 && secondLevelTlds.has(sld) && tld.length <= 3) {
-    return parts.slice(-3).join('.')
-  }
-  return parts.slice(-2).join('.')
+  return getDomain(host, { allowPrivateDomains: true }) || host
+}
+
+function isLoopbackHostname(hostname) {
+  const host = String(hostname ?? '').toLowerCase().replace(/^\[|\]$/g, '')
+  return host === 'localhost' || host === '::1' || /^127(?:\.\d{1,3}){3}$/.test(host)
 }
 
 /** 判断两 URL 是否指向同一根域名或同机环境（主域名相同、host 相同或均为 localhost/环回地址）。 */
@@ -101,8 +95,8 @@ function isSameRootDomain(urlA, urlB) {
     const hostA = uA.hostname.toLowerCase()
     const hostB = uB.hostname.toLowerCase()
     if (hostA === hostB) return true
-    const isLocalA = hostA === 'localhost' || hostA === '127.0.0.1' || hostA === '::1'
-    const isLocalB = hostB === 'localhost' || hostB === '127.0.0.1' || hostB === '::1'
+    const isLocalA = isLoopbackHostname(hostA)
+    const isLocalB = isLoopbackHostname(hostB)
     if (isLocalA && isLocalB) return true
     const apexA = extractApexDomain(hostA)
     const apexB = extractApexDomain(hostB)
@@ -233,6 +227,18 @@ function maskKey(k) {
   return s.length > 4 ? `••••${s.slice(-4)}` : '••••'
 }
 
+/** 网关地址只供 UI 标识主机；移除 userinfo、路径和查询参数，避免内嵌凭据出 Host API。 */
+function sanitizeGatewayBaseUrl(input) {
+  if (!input) return null
+  try {
+    const url = new URL(String(input))
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') return null
+    return url.origin
+  } catch {
+    return null
+  }
+}
+
 /** 网关条目 → 白名单形状；原始 api-key 绝不进返回值。 */
 function sanitizeGatewayEntry(type, e) {
   if (typeof e === 'string') {
@@ -253,7 +259,7 @@ function sanitizeGatewayEntry(type, e) {
     type,
     name: e.name ? String(e.name) : null,
     disabled: !!e.disabled,
-    baseUrl: e['base-url'] ? String(e['base-url']) : null,
+    baseUrl: sanitizeGatewayBaseUrl(e['base-url']),
     keys,
     models,
   }
@@ -996,7 +1002,12 @@ export function apply(ctx) {
 
   async function readBody(req) {
     const chunks = []
-    for await (const chunk of req) chunks.push(chunk)
+    let totalBytes = 0
+    for await (const chunk of req) {
+      totalBytes += chunk.length
+      if (totalBytes > 64 * 1024) throw Object.assign(new Error('请求体过大'), { statusCode: 413 })
+      chunks.push(chunk)
+    }
     const text = Buffer.concat(chunks).toString('utf8')
     if (!text.trim()) return {}
     const data = JSON.parse(text)
@@ -1044,13 +1055,17 @@ export function apply(ctx) {
         const body = await readBody(req)
 
         // —— 校验 ——
-        const baseUrl = normalizeBase(body.baseUrl)
+        const currentConfig = scope.get()
+        const hasBaseUrl = Object.prototype.hasOwnProperty.call(body, 'baseUrl')
+        const hasPublicUrl = Object.prototype.hasOwnProperty.call(body, 'publicUrl')
+        const hasPrivacyMode = Object.prototype.hasOwnProperty.call(body, 'privacyMode')
+        const baseUrl = normalizeBase(hasBaseUrl ? body.baseUrl : currentConfig.baseUrl)
         if (!baseUrl || !isAbsoluteHttpUrl(baseUrl)) {
           return sendJson(res, 400, {
             error: { code: 'INVALID', field: 'baseUrl', message: 'Base URL 必填，且必须是绝对 http(s) 地址' },
           })
         }
-        const publicUrl = normalizeBase(body.publicUrl)
+        const publicUrl = normalizeBase(hasPublicUrl ? body.publicUrl : currentConfig.publicUrl)
         if (publicUrl && !isAbsoluteHttpUrl(publicUrl)) {
           return sendJson(res, 400, {
             error: { code: 'INVALID', field: 'publicUrl', message: 'Public URL 必须是绝对 http(s) 地址' },
@@ -1073,21 +1088,20 @@ export function apply(ctx) {
             error: { code: 'KEY_NOT_WRITABLE', message: `密钥写入失败：${error?.message ?? error}` },
           })
         }
-        await scope.update({ baseUrl, publicUrl, privacyMode: body.privacyMode === true })
+        const privacyMode = hasPrivacyMode ? body.privacyMode === true : currentConfig.privacyMode === true
+        await scope.update({ baseUrl, publicUrl, privacyMode })
 
-        // —— 保存后探测：失败不回滚，但如实告知（M1 语义） ——
+        // —— 保存后探测：buildStatus 只探测一次，失败不回滚但如实告知 ——
         invalidateCaches()
-        const keyInfo = await ctx.credentials.describe(KEY_REF)
-        let probe = null
-        if (keyInfo.configured) {
-          const key = (await ctx.credentials.resolve(KEY_REF))?.value
-          probe = key ? await probeAuthFiles(baseUrl, key) : null
-        }
+        const status = await buildStatus(true)
+        const probe = status.mode === 'ready'
+          ? { ok: status.ok, code: status.error?.code ?? null, message: status.error?.message ?? null }
+          : null
         sendJson(res, 200, {
           saved: true,
           config: await publicConfig(),
-          probe: probe ? { ok: probe.ok, code: probe.code ?? null, message: probe.message ?? null } : null,
-          status: await buildStatus(true),
+          probe,
+          status,
         })
       }),
     }),
