@@ -470,6 +470,22 @@ function parseAntigravityQuota(body) {
   return { plan, windows }
 }
 
+/** 简化并规范化套餐名称（如 Antigravity Starter Quota -> Starter）。 */
+function cleanPlanName(name) {
+  if (!name || typeof name !== 'string') return null
+  const raw = name.trim()
+  const lower = raw.toLowerCase()
+  if (lower.includes('starter')) return 'Starter'
+  if (lower === 'free-tier' || lower === 'free' || lower.includes('free quota')) return 'Free'
+  if (lower === 'standard-tier' || lower === 'standard') return 'Standard'
+  if (lower === 'pro-tier' || lower === 'pro quota' || lower === 'antigravity pro quota') return 'Pro'
+  let cleaned = raw
+    .replace(/^antigravity\s+/i, '')
+    .replace(/\s+quota$/i, '')
+    .trim()
+  return cleaned || raw
+}
+
 /** loadCodeAssist: 探测 Antigravity 账号的订阅套餐 (paidTier / currentTier / allowedTiers) */
 function parseAntigravityPlan(body) {
   if (!body || typeof body !== 'object') return null
@@ -479,8 +495,8 @@ function parseAntigravityPlan(body) {
   if (paidTier && typeof paidTier === 'object') {
     const name = typeof paidTier.name === 'string' ? paidTier.name.trim() : ''
     const id = typeof paidTier.id === 'string' ? paidTier.id.trim() : ''
-    if (name) return name
-    if (id) return id
+    if (name) return cleanPlanName(name)
+    if (id) return cleanPlanName(id)
   }
 
   // 2. 检查 ineligibleTiers (是否属于受限/未授权区域)
@@ -492,11 +508,11 @@ function parseAntigravityPlan(body) {
     const name = typeof currentTier.name === 'string' ? currentTier.name.trim() : ''
     const id = typeof currentTier.id === 'string' ? currentTier.id.trim() : ''
     if (!hasIneligible) {
-      if (name) return name
+      if (name) return cleanPlanName(name)
       if (id === 'standard-tier') return 'Pro'
       if (id === 'free-tier') return 'Free'
       if (id === 'legacy-tier') return 'Legacy'
-      if (id) return id
+      if (id) return cleanPlanName(id)
     }
   }
 
@@ -505,12 +521,12 @@ function parseAntigravityPlan(body) {
     const defaultTier = body.allowedTiers.find((t) => t?.is_default === true) || body.allowedTiers[0]
     if (defaultTier) {
       const name = defaultTier.name || defaultTier.id
-      if (name) return hasIneligible ? `${name} (Restricted)` : name
+      if (name) return hasIneligible ? `${cleanPlanName(name)} (Restricted)` : cleanPlanName(name)
     }
   }
 
   // 5. fallback tier
-  if (typeof body.tier === 'string' && body.tier.trim()) return body.tier.trim()
+  if (typeof body.tier === 'string' && body.tier.trim()) return cleanPlanName(body.tier)
 
   return null
 }
@@ -557,6 +573,7 @@ const QUOTA_PROBES = {
   },
   antigravity: {
     url: 'https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary',
+    fallbackUrl: 'https://cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels',
     method: 'POST',
     header: {
       Authorization: 'Bearer $TOKEN$',
@@ -568,47 +585,68 @@ const QUOTA_PROBES = {
   },
 }
 
-/** POST /v0/management/api-call 配额探针；只回白名单解析结果，绝不回传上游原始 body。 */
+/** POST /v0/management/api-call 配额探针；支持 fallbackUrl 降级重试；只回白名单解析结果。 */
 async function probeQuota(baseUrl, key, authIndex, probe) {
-  const ctrl = new AbortController()
-  const timer = setTimeout(() => ctrl.abort(), REQUEST_TIMEOUT_MS)
-  try {
-    const payload = {
-      authIndex,
-      method: probe.method || 'GET',
-      url: probe.url,
-      header: probe.header,
-    }
-    if (probe.body !== undefined) {
-      payload.body = typeof probe.body === 'string' ? probe.body : JSON.stringify(probe.body)
-    }
-    const res = await fetch(mgmtUrl(baseUrl, '/api-call'), {
-      method: 'POST',
-      headers: { authorization: `Bearer ${key}`, 'content-type': 'application/json' },
-      body: JSON.stringify(payload),
-      signal: ctrl.signal,
-    })
-    if (res.status === 401 || res.status === 403) return { ok: false, message: '管理密钥无效' }
-    if (!res.ok) return { ok: false, message: `CPA 返回 HTTP ${res.status}` }
-    const data = await res.json()
-    const code = Number(data?.status_code ?? 0)
-    if (code === 401 || code === 403) return { ok: false, message: '上游凭证鉴权失败' }
-    if (code < 200 || code >= 300) return { ok: false, message: `上游返回 HTTP ${code}` }
-    let body = data?.body
-    if (typeof body === 'string') {
-      try {
-        body = JSON.parse(body)
-      } catch {
-        return { ok: false, message: '上游响应非 JSON' }
+  const urlsToTry = [probe.url, probe.fallbackUrl].filter(Boolean)
+  let lastError = null
+
+  for (const targetUrl of urlsToTry) {
+    const ctrl = new AbortController()
+    const timer = setTimeout(() => ctrl.abort(), REQUEST_TIMEOUT_MS)
+    try {
+      const payload = {
+        authIndex,
+        method: probe.method || 'GET',
+        url: targetUrl,
+        header: probe.header,
       }
+      if (probe.body !== undefined) {
+        payload.body = typeof probe.body === 'string' ? probe.body : JSON.stringify(probe.body)
+      }
+      const res = await fetch(mgmtUrl(baseUrl, '/api-call'), {
+        method: 'POST',
+        headers: { authorization: `Bearer ${key}`, 'content-type': 'application/json' },
+        body: JSON.stringify(payload),
+        signal: ctrl.signal,
+      })
+      if (res.status === 401 || res.status === 403) return { ok: false, message: '管理密钥无效' }
+      if (!res.ok) {
+        lastError = `CPA 返回 HTTP ${res.status}`
+        continue
+      }
+      const data = await res.json()
+      const code = Number(data?.status_code ?? 0)
+      if (code === 401 || code === 403) {
+        lastError = '上游凭证鉴权失败（或新账号尚未激活/受限）'
+        continue
+      }
+      if (code < 200 || code >= 300) {
+        lastError = `上游返回 HTTP ${code}`
+        continue
+      }
+      let body = data?.body
+      if (typeof body === 'string') {
+        try {
+          body = JSON.parse(body)
+        } catch {
+          lastError = '上游响应非 JSON'
+          continue
+        }
+      }
+      if (!body || typeof body !== 'object') {
+        lastError = '上游响应为空'
+        continue
+      }
+      const parsed = probe.parse(body)
+      return { ok: true, quota: parsed }
+    } catch (error) {
+      lastError = String(error?.message ?? error)
+    } finally {
+      clearTimeout(timer)
     }
-    if (!body || typeof body !== 'object') return { ok: false, message: '上游响应为空' }
-    return { ok: true, quota: probe.parse(body) }
-  } catch (error) {
-    return { ok: false, message: String(error?.message ?? error) }
-  } finally {
-    clearTimeout(timer)
   }
+
+  return { ok: false, message: lastError ?? '探针请求失败' }
 }
 
 /** 简单并发池。 */
@@ -708,7 +746,12 @@ export function apply(ctx) {
     const plan = planRes ?? (quotaRes.ok ? quotaRes.quota.plan : null)
     const data = quotaRes.ok
       ? { supported: true, windows: quotaRes.quota.windows, plan, error: null }
-      : { supported: true, windows: [], plan: planRes ?? null, error: quotaRes.message }
+      : {
+          supported: true,
+          windows: [],
+          plan,
+          error: plan ? `${quotaRes.message}（若为新账号，请先发起一次对话以完成初始化）` : quotaRes.message,
+        }
     quotaCache.set(authIndex, { at: Date.now(), data })
     return data
   }

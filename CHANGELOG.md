@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.4
+
+- 优化 Antigravity 套餐名称简化：将 `Antigravity Starter Quota` 等超长全称精简为简洁的 `Starter` 徽章
+- 增强配额探针容错与 Fallback：`retrieveUserQuotaSummary` 遇 403/404 时自动回退至 `fetchAvailableModels` 探测单模型配额，并在新账号未激活时提供明确提示
+
 ## 0.1.3
 
 - 新增 Antigravity 账号套餐等级（Plan / Tier）探针支持：通过 `loadCodeAssist` 端点解析 `paidTier` / `currentTier` / `allowedTiers`，支持在账号卡片展示 Free / Pro / Google One AI Premium 等套餐徽章

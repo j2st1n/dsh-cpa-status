@@ -175,7 +175,7 @@ window.__ModuleLoader__.load({
       const t = String(type ?? '').toLowerCase()
       if (!t) return null
       const base = { fontSize: 10, borderRadius: 4, padding: '1px 6px', flexShrink: 0, fontWeight: 600, letterSpacing: 0.3 }
-      if (t === 'free' || t.includes('free')) return { ...base, color: T.secondary, background: 'transparent', border: `1px solid ${T.border}` }
+      if (t === 'free' || t.includes('free') || t.includes('starter')) return { ...base, color: T.secondary, background: 'transparent', border: `1px solid ${T.border}` }
       if (['plus', 'intermediate', 'basic', 'standard'].includes(t) || t.includes('standard'))
         return { ...base, color: '#fff', background: T.brand, border: `1px solid ${T.brand}` }
       if (['pro', 'professional', 'advanced'].includes(t) || t.includes('pro') || t.includes('premium') || t.includes('advanced'))
