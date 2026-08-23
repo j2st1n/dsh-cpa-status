@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.2
+
+- 优化 CPA 路由匹配算法：支持同根域名（Apex Domain，如管理子域 `cpa.example.com` 与端点子域 `api.example.com`）及同机环境别名判定
+
 ## 0.1.1
 
 - 新增 Antigravity 官方分组配额池探针支持（Gemini / Claude 组 5h 与周限额）

@@ -74,11 +74,58 @@ function normalizeForCompare(input) {
   }
 }
 
-/** 路由命中：endpoint 与 CPA base 相同，或 endpoint 是 base 的子路径（如 base + /v1）。 */
-function endpointMatchesCpa(endpoint, baseUrl) {
-  const ep = normalizeForCompare(endpoint)
-  const base = normalizeForCompare(baseUrl)
-  return ep === base || ep.startsWith(`${base}/`)
+/** 提取根域名 / 主机名（支持常见双层顶级域如 .com.cn / .org.cn / .co.uk / .com.hk 等）。 */
+function extractApexDomain(hostname) {
+  if (!hostname || typeof hostname !== 'string') return ''
+  const host = hostname.toLowerCase().trim()
+  // IP 形式（IPv4 / IPv6）或无点主机名（localhost 等）不作分段截取
+  if (!host.includes('.') || /^[\d.]+$/.test(host) || host.includes(':')) {
+    return host
+  }
+  const parts = host.split('.')
+  if (parts.length <= 2) return host
+  const secondLevelTlds = new Set(['com', 'edu', 'gov', 'net', 'org', 'co', 'ac'])
+  const tld = parts[parts.length - 1]
+  const sld = parts[parts.length - 2]
+  if (parts.length >= 3 && secondLevelTlds.has(sld) && tld.length <= 3) {
+    return parts.slice(-3).join('.')
+  }
+  return parts.slice(-2).join('.')
+}
+
+/** 判断两 URL 是否指向同一根域名或同机环境（主域名相同、host 相同或均为 localhost/环回地址）。 */
+function isSameRootDomain(urlA, urlB) {
+  try {
+    const uA = new URL(normalizeBase(urlA))
+    const uB = new URL(normalizeBase(urlB))
+    const hostA = uA.hostname.toLowerCase()
+    const hostB = uB.hostname.toLowerCase()
+    if (hostA === hostB) return true
+    const isLocalA = hostA === 'localhost' || hostA === '127.0.0.1' || hostA === '::1'
+    const isLocalB = hostB === 'localhost' || hostB === '127.0.0.1' || hostB === '::1'
+    if (isLocalA && isLocalB) return true
+    const apexA = extractApexDomain(hostA)
+    const apexB = extractApexDomain(hostB)
+    return !!(apexA && apexB && apexA === apexB)
+  } catch {
+    return false
+  }
+}
+
+/** 路由命中：endpoint 与 CPA base / publicUrl 相同，或为其子路径，或位于同一根域名/同机环境。 */
+function endpointMatchesCpa(endpoint, ...candidateUrls) {
+  const epNorm = normalizeForCompare(endpoint)
+  for (const candidate of candidateUrls) {
+    if (!candidate) continue
+    const baseNorm = normalizeForCompare(candidate)
+    if (epNorm === baseNorm || epNorm.startsWith(`${baseNorm}/`)) {
+      return true
+    }
+    if (isSameRootDomain(endpoint, candidate)) {
+      return true
+    }
+  }
+  return false
 }
 
 // ---------------------------------------------------------------------------
@@ -619,7 +666,7 @@ export function apply(ctx) {
   }
 
   /** 当前 DSH 模型路由是否指向 CPA；读不到时降级为 null（不阻塞摘要）。 */
-  function routeMatch(baseUrl) {
+  function routeMatch(baseUrl, publicUrl) {
     try {
       const adm = ctx.get('agentDefaultModel')
       const llm = ctx.get('llm')
@@ -635,7 +682,7 @@ export function apply(ctx) {
         .map((k) => profile[k])
         .find((v) => typeof v === 'string' && v.trim())
       if (!endpoint) return null
-      return { matchesCpa: endpointMatchesCpa(endpoint, baseUrl), endpoint: normalizeBase(endpoint) }
+      return { matchesCpa: endpointMatchesCpa(endpoint, baseUrl, publicUrl), endpoint: normalizeBase(endpoint) }
     } catch {
       return null
     }
@@ -685,7 +732,7 @@ export function apply(ctx) {
       mode: 'ready',
       fetchedAt: Date.now(),
       config,
-      route: routeMatch(state.baseUrl),
+      route: routeMatch(state.baseUrl, cfg.publicUrl),
       links,
     }
     if (!probe.ok) {
