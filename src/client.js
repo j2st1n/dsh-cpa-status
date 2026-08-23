@@ -503,7 +503,9 @@ window.__ModuleLoader__.load({
           className: 'cpa-btn cpa-footer-btn',
           style: {
             ...btnBase,
+            display: props?.wide === false ? 'inline-flex' : 'flex',
             width: props?.wide === false ? undefined : '100%',
+            boxSizing: 'border-box',
             justifyContent: props?.wide === false ? 'center' : 'flex-start',
             margin: '2px 0',
           },
