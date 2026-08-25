@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.8
+
+- 优化 Antigravity 账号套餐徽章展示体验：引入 `planCache` 与自动轻量探测机制，打开面板时自动解析 Antigravity 订阅等级（如 `Pro` / `Starter` / `Free`），与 ChatGPT 体验一致，无需手动点击「同步配额」即可一直显示。
+
+## 0.1.7
+
+- 优化 README 安装命令为官方 npm 源优先。
+
 ## 0.1.6
 
 - 修复清除 Management Key 时意外清空 Public URL 与隐私设置的问题

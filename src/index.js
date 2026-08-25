@@ -739,11 +739,41 @@ export function apply(ctx) {
   let gatewayCache = null
   /** @type {Map<string, { at: number, data: any }>} authIndex → 配额缓存 */
   const quotaCache = new Map()
+  /** @type {Map<string, { at: number, plan: string | null }>} authIndex → 套餐缓存 (1小时) */
+  const planCache = new Map()
+  const PLAN_CACHE_TTL_MS = 60 * 60 * 1000
 
   function invalidateCaches() {
     probeCache = null
     gatewayCache = null
     quotaCache.clear()
+    planCache.clear()
+  }
+
+  /** 单账号套餐轻量探测（带 1 小时缓存；仅在 auth-file 无静态 plan_type 时向 loadCodeAssist 探测，0 配额消耗）。 */
+  async function planForFile(baseUrl, key, file) {
+    const provider = String(file?.provider ?? file?.type ?? '').toLowerCase()
+    const idTokenPlan = planFromIdToken(file)
+    if (idTokenPlan?.type) return idTokenPlan
+
+    const authIndex = String(file?.auth_index ?? '')
+    if (!authIndex) return null
+
+    const cached = planCache.get(authIndex)
+    if (cached && Date.now() - cached.at < PLAN_CACHE_TTL_MS) {
+      return cached.plan ? { type: cached.plan, daysLeft: null } : null
+    }
+
+    const planProbe = PLAN_PROBES[provider]
+    if (planProbe) {
+      const pRes = await probeQuota(baseUrl, key, authIndex, planProbe).catch(() => null)
+      if (pRes?.ok && pRes.quota?.plan) {
+        const plan = pRes.quota.plan
+        planCache.set(authIndex, { at: Date.now(), plan })
+        return { type: plan, daysLeft: null }
+      }
+    }
+    return null
   }
 
   async function probeCached(baseUrl, key, force) {
@@ -939,7 +969,7 @@ export function apply(ctx) {
       const failed = f.failed | 0
       const total = success + failed
       const provider = String(f?.provider ?? f?.type ?? '').toLowerCase()
-      const idTokenPlan = planFromIdToken(f)
+      const resolvedPlanInfo = await planForFile(state.baseUrl, state.key, f)
 
       let quota
       const authIndex = String(f?.auth_index ?? '')
@@ -947,13 +977,14 @@ export function apply(ctx) {
         const q = await quotaForFile(state.baseUrl, state.key, f, force)
         const entry = authIndex ? quotaCache.get(authIndex) : null
         quota = { ...q, synced: !!q.supported, fetchedAt: entry?.at ?? (q.supported ? Date.now() : null) }
+        if (q.plan) planCache.set(authIndex, { at: Date.now(), plan: q.plan })
       } else {
         const cached = authIndex ? quotaCache.get(authIndex) : null
         quota = cached
           ? { ...cached.data, synced: true, fetchedAt: cached.at }
           : { supported: !!QUOTA_PROBES[provider], windows: [], plan: null, error: null, synced: false, fetchedAt: null }
       }
-      const planType = quota.plan ?? idTokenPlan?.type ?? null
+      const planType = quota.plan ?? resolvedPlanInfo?.type ?? null
 
       return {
         id: String(f.name ?? f.id ?? ''),
@@ -968,7 +999,7 @@ export function apply(ctx) {
         successRate: total > 0 ? success / total : null,
         recent: summarizeTraffic([f]),
         health: healthFromRecent(f.recent_requests),
-        plan: planType ? { type: planType, daysLeft: idTokenPlan?.daysLeft ?? null } : null,
+        plan: planType ? { type: planType, daysLeft: resolvedPlanInfo?.daysLeft ?? null } : null,
         quota: {
           supported: quota.supported,
           windows: quota.windows,
