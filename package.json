@@ -1,6 +1,6 @@
 {
   "name": "dsh-cpa-status",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "description": "CPA account-pool status panel for DeepSeek Harness: sidebar health light, quota bars, success-rate ticks, and gateway key endings",
   "type": "module",
   "license": "Apache-2.0",
