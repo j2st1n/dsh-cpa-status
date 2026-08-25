@@ -446,11 +446,29 @@ window.__ModuleLoader__.load({
     // ---------- 常驻入口 ----------
     function FooterEntry(props) {
       const state = useStore()
+      const [hovering, setHovering] = useState(false)
+      const hoverTimerRef = React.useRef(null)
+
       useEffect(() => {
         refreshStatus(false)
         const timer = setInterval(() => refreshStatus(false), 20_000)
         return () => clearInterval(timer)
       }, [])
+
+      const onMouseEnter = () => {
+        clearTimeout(hoverTimerRef.current)
+        hoverTimerRef.current = setTimeout(() => {
+          setHovering(true)
+          if (!state.accounts && !state.accountsLoading) {
+            refreshAccounts(false, false)
+          }
+        }, 220)
+      }
+      const onMouseLeave = () => {
+        clearTimeout(hoverTimerRef.current)
+        setHovering(false)
+      }
+
       const st = state.status
       let color = T.warn
       let text = '连接 CPA'
@@ -498,15 +516,16 @@ window.__ModuleLoader__.load({
                 { style: { display: 'inline-flex', alignItems: 'center', lineHeight: '18px', whiteSpace: 'nowrap', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' } },
                 segments.flatMap((s, i) =>
                   i === 0
-                    ? [h('span', { key: `s${i}`, style: { color: s.color, flexShrink: 0 } }, s.text)]
+                    ? [h('span', { key: `s${i}`, style: { color: s.color, fontWeight: 500, flexShrink: 0 } }, s.text)]
                     : [
                         h('span', { key: `sep${i}`, style: { color: T.secondary, margin: '0 5px', opacity: 0.7, flexShrink: 0 } }, '·'),
-                        h('span', { key: `s${i}`, style: { color: s.color, fontVariantNumeric: 'tabular-nums', overflow: 'hidden', textOverflow: 'ellipsis' } }, s.text),
+                        h('span', { key: `s${i}`, style: { color: s.color, fontWeight: 500, fontVariantNumeric: 'tabular-nums', overflow: 'hidden', textOverflow: 'ellipsis' } }, s.text),
                       ],
                 ),
               )
             : h('span', { style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', lineHeight: '18px' } }, text)
-      return h(
+
+      const node = h(
         'button',
         {
           className: 'cpa-btn cpa-footer-btn',
@@ -519,12 +538,104 @@ window.__ModuleLoader__.load({
             margin: '2px 0',
             minWidth: 0,
             flexShrink: 0,
+            borderColor: state.open ? T.brand : T.border,
+            background: state.open ? 'var(--dsw-alias-interactive-bg-hover, rgba(59,130,246,.12))' : 'transparent',
           },
+          onMouseEnter,
+          onMouseLeave,
           onClick: toggleOverlay,
           title,
         },
         h('span', { className: color === T.ok ? 'cpa-dot-live' : undefined, style: dotStyle(color) }),
         labelEl,
+      )
+
+      if (!hovering || state.open || st?.mode !== 'ready' || !st.ok) return node
+
+      const accounts = state.accounts || []
+      const gateways = state.gateways || []
+      const tr = st.traffic
+
+      return h(
+        'div',
+        {
+          style: { position: 'relative', width: '100%' },
+          onMouseEnter,
+          onMouseLeave,
+        },
+        node,
+        h(
+          'div',
+          {
+            className: 'cpa-panel-enter',
+            style: {
+              position: 'absolute',
+              left: 0,
+              right: 0,
+              bottom: 'calc(100% + 6px)',
+              background: T.bg,
+              border: `1px solid ${T.border2}`,
+              borderRadius: '10px',
+              boxShadow: '0 8px 24px rgba(0,0,0,.18)',
+              padding: '12px 14px',
+              fontSize: '11px',
+              color: T.label,
+              zIndex: 100,
+              fontFamily: 'system-ui, -apple-system, sans-serif',
+            },
+          },
+          h(
+            'div',
+            { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 } },
+            h('span', { style: { fontWeight: 600, fontSize: '12px' } }, '🏢 CPA 账号池与网关概览'),
+            tr
+              ? h(
+                  'span',
+                  { style: { fontSize: '10px', color: T.secondary, fontVariantNumeric: 'tabular-nums' } },
+                  `${tr.requests} 次/30min · 成功率 ${fmtPct(tr.successRate)}`,
+                )
+              : null,
+          ),
+          h(
+            'div',
+            {
+              style: {
+                borderTop: `1px dashed ${T.border}`,
+                paddingTop: 8,
+                marginTop: 6,
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 5,
+              },
+            },
+            accounts.length === 0
+              ? h('div', { style: { color: T.secondary, fontSize: 10 } }, '正在读取账号池…')
+              : accounts.map((a, i) => {
+                  const stateColor = a.disabled ? T.secondary : a.unavailable ? T.err : T.ok
+                  return h(
+                    'div',
+                    {
+                      key: a.id || i,
+                      style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 6 },
+                    },
+                    h(
+                      'div',
+                      { style: { display: 'flex', alignItems: 'center', gap: 5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } },
+                      h('span', { style: { ...dotStyle(stateColor), width: 5, height: 5 } }),
+                      h('span', { style: { fontWeight: 500, fontSize: 11, overflow: 'hidden', textOverflow: 'ellipsis' }, title: a.label }, maskLabel(a.label) || a.id),
+                    ),
+                    h(PlanBadge, { plan: a.plan }),
+                  )
+                }),
+          ),
+          gateways.length > 0
+            ? h(
+                'div',
+                { style: { borderTop: `1px dashed ${T.border}`, paddingTop: 6, marginTop: 8, fontSize: 10, color: T.secondary } },
+                `🌐 已接入 ${gateways.length} 个 AI 供应商网关`,
+              )
+            : null,
+        ),
       )
     }
 
