@@ -15,6 +15,9 @@
  * 安全：management key 只存 Host credentials；任何响应不回传完整密钥与上游原始 body；
  * 不代理 api-keys 等返回原始密钥的端点；账号行只回白名单字段。
  */
+import fs from 'node:fs'
+import path from 'node:path'
+import os from 'node:os'
 import z from '@deepseek-ai/schemastery'
 import { getDomain } from 'tldts'
 
@@ -721,12 +724,57 @@ function planFromIdToken(file) {
   return null
 }
 
+/**
+ * 稳健解析/构建配置作用域：
+ * 1. 优先使用 ctx.settings.register（若宿主环境或测试 harness 支持）；
+ * 2. 否则持久化存储于 $DSH_HOME/${ns}.json，内存安全缓存；
+ * 3. 彻底避免因宿主缺少 register API 抛出 TypeError: ctx.settings.register is not a function。
+ */
+function resolveSettingsScope(ctx, ns, defaultSchema) {
+  if (ctx?.settings && typeof ctx.settings.register === 'function') {
+    return ctx.settings.register(ns, defaultSchema)
+  }
+
+  const dshHome = process.env.DSH_HOME || path.join(os.homedir(), '.dsh')
+  const configPath = path.join(dshHome, `${ns}.json`)
+  let cached = null
+
+  function readConfig() {
+    if (cached !== null) return cached
+    let parsed = {}
+    if (fs.existsSync(configPath)) {
+      try {
+        parsed = JSON.parse(fs.readFileSync(configPath, 'utf8'))
+      } catch {}
+    }
+    cached = {
+      baseUrl: typeof parsed.baseUrl === 'string' ? parsed.baseUrl : (process.env.CPA_BASE_URL || ''),
+      publicUrl: typeof parsed.publicUrl === 'string' ? parsed.publicUrl : '',
+      privacyMode: typeof parsed.privacyMode === 'boolean' ? parsed.privacyMode : false,
+    }
+    return cached
+  }
+
+  return {
+    get: () => ({ ...readConfig() }),
+    update: async (patch) => {
+      const current = readConfig()
+      const next = { ...current, ...patch }
+      cached = next
+      try {
+        fs.mkdirSync(path.dirname(configPath), { recursive: true })
+        fs.writeFileSync(configPath, JSON.stringify(next, null, 2), 'utf8')
+      } catch {}
+    },
+  }
+}
+
 // ---------------------------------------------------------------------------
 // 插件本体
 // ---------------------------------------------------------------------------
 
 export function apply(ctx) {
-  const scope = ctx.settings.register(NS, schema)
+  const scope = resolveSettingsScope(ctx, NS, schema)
 
   // 环境变量首填：仅当用户从未配置过时写入一次。
   if (!normalizeBase(scope.get().baseUrl) && process.env.CPA_BASE_URL) {
@@ -866,7 +914,7 @@ export function apply(ctx) {
       if (!selection?.provider) return null
       const entry = llm.listConfigurableProviders().find((p) => p.provider === selection.provider)
       if (!entry) return null
-      let profile = ctx.settings.get(/** @type {any} */ (entry.settingsNs))
+      let profile = typeof ctx.settings?.get === 'function' ? ctx.settings.get(/** @type {any} */ (entry.settingsNs)) : undefined
       for (const key of entry.settingsPath ?? []) profile = profile?.[key]
       if (!profile || typeof profile !== 'object') return null
       const endpoint = ['baseUrl', 'baseURL', 'endpoint', 'apiBase', 'base_url']

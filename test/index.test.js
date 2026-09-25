@@ -176,3 +176,27 @@ test('sibling hosts under a registrable domain still match CPA', async () => {
     globalThis.fetch = originalFetch
   }
 })
+
+test('apply succeeds even when ctx.settings lacks register function (real DSH host)', () => {
+  const routes = new Map()
+  const fakeCtx = {
+    settings: {
+      describe: () => [],
+      update: async () => {},
+    },
+    credentials: {
+      describe: async () => ({ configured: false }),
+      resolve: async () => undefined,
+    },
+    webServer: {
+      register: (opts) => routes.set(opts.path, opts),
+    },
+    effect: (fn) => fn(),
+  }
+
+  assert.doesNotThrow(() => apply(fakeCtx))
+  assert.ok(routes.has('/api/cpa-status'))
+  assert.ok(routes.has('/api/cpa-status/config'))
+  assert.ok(routes.has('/api/cpa-status/accounts'))
+})
+
