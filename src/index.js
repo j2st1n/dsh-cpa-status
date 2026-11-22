@@ -126,6 +126,99 @@ function endpointMatchesCpa(endpoint, ...candidateUrls) {
 }
 
 // ---------------------------------------------------------------------------
+// 本地 Host/Origin fence
+//
+// 移植自 dsh-opencode-status（零外部依赖），与 DSH client-connection 的
+// isTrustedApiRequest 语义一致。exact 路由不经过宿主准入，因此路由自身必须做来源
+// 校验：否则任意网页可用 DNS rebinding 伪造 Host 读走配置，或用跨站 PUT 改写
+// baseUrl 并覆盖 managementKey。
+//
+// 命名说明：上图 URL 工具区已有一个 isLoopbackHostname（网关同源判定用，会剥离
+// IPv6 方括号、不校验 127/8 的八位组范围），语义与 fence 版本不同且被
+// isSameRootDomain 复用。为不改动该既有行为，fence 版改名为
+// isLoopbackFenceHostname，逻辑与范本逐字一致。
+// ---------------------------------------------------------------------------
+
+/** 读取请求头；Node 的 headers 是名字归一化后的普通对象。 */
+function headerValue(headers, name) {
+  const value = headers?.[name]
+  return typeof value === 'string' ? value : Array.isArray(value) ? value[0] : undefined
+}
+
+/** 与 DSH client-connection 对齐：localhost、[::1] 与 127/8（八位组必须 ≤255）。 */
+function isLoopbackFenceHostname(hostname) {
+  if (hostname === 'localhost' || hostname === '[::1]') return true
+  const parts = hostname.split('.')
+  return parts.length === 4 && parts[0] === '127' && parts.every((part) => /^\d{1,3}$/.test(part) && Number(part) <= 255)
+}
+
+/** 按指定 scheme 解析裸 authority（host 或 host:port）；非法值返回 undefined。 */
+function parseAuthority(authority, scheme = 'http:') {
+  try {
+    return new URL(`${scheme}//${authority}`)
+  } catch {
+    return undefined
+  }
+}
+
+/** 绑定地址的 URL 主机名形式：IPv6 加方括号，去掉接口 zone。 */
+function bindHostname(bindHost) {
+  if (typeof bindHost !== 'string' || bindHost === '') return undefined
+  const zoneAt = bindHost.indexOf('%')
+  const bare = zoneAt === -1 ? bindHost : bindHost.slice(0, zoneAt)
+  try {
+    return new URL(`http://${bare.includes(':') ? `[${bare}]` : bare}`).hostname.toLowerCase()
+  } catch {
+    return undefined
+  }
+}
+
+/** 对齐 DSH 的 isTrustedAuthority：无端口条目匹配任意端口，带端口条目精确匹配。 */
+function isTrustedAuthority(hostUrl, trustedHosts, scheme) {
+  return trustedHosts.some((entry) => {
+    const entryUrl = parseAuthority(entry, scheme)
+    if (entryUrl === undefined) return false
+    const otherScheme = entryUrl.protocol === 'http:' ? 'https:' : 'http:'
+    const explicitPort = entryUrl.port !== '' ? entryUrl.port : new URL(`${otherScheme}//${entry}`).port
+    return explicitPort === ''
+      ? entryUrl.hostname === hostUrl.hostname
+      : entryUrl.host === hostUrl.host
+  })
+}
+
+/** Origin 的 http(s) scheme；非法或非 http(s) 值返回 undefined。 */
+function originScheme(origin) {
+  try {
+    const url = new URL(origin)
+    return url.protocol === 'https:' ? 'https:' : url.protocol === 'http:' ? 'http:' : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/** 对齐 DSH 的 isSameAuthorityOrigin：Host 按 Origin 的 scheme 归一化默认端口后比较。 */
+function isSameAuthorityOrigin(origin, host) {
+  const scheme = originScheme(origin)
+  if (scheme === undefined) return false
+  const hostUrl = parseAuthority(host, scheme)
+  return hostUrl !== undefined && new URL(origin).host === hostUrl.host
+}
+
+/** 读取宿主服务；未提供或未注入时 cordis 会抛错，这里统一降级为 undefined。 */
+function readService(read) {
+  try {
+    return read()
+  } catch {
+    return undefined
+  }
+}
+
+/** PUT/POST 只接受 JSON 请求体，允许带 charset 参数。 */
+function isJsonContentType(value) {
+  return typeof value === 'string' && /^application\/json\s*(?:;|$)/i.test(value.trim())
+}
+
+// ---------------------------------------------------------------------------
 // auth-files 汇总
 // ---------------------------------------------------------------------------
 
@@ -1096,13 +1189,92 @@ export function apply(ctx) {
     return data
   }
 
-  function guard(handler) {
+  /** connection 服务（DSH Web 的 Host/Origin fence 所有者）及其 trustedHosts。 */
+  function connectionService() {
+    // 注意：本插件的 ctx.get 对未知服务返回 null（不是 undefined），故用 != null。
+    return readService(() => (typeof ctx.get === 'function' ? ctx.get('connection') : undefined))
+  }
+
+  function connectionTrustedHosts() {
+    const trusted = readService(() => connectionService()?.trustedHosts)
+    return Array.isArray(trusted) ? trusted.filter((entry) => typeof entry === 'string') : []
+  }
+
+  /** 监听器 scheme（https 由 TLS 配置决定，从不取自请求头）。 */
+  function listenerScheme() {
+    const protocol = readService(() => ctx.webServer?.protocol)
+    return protocol === 'https:' || protocol === 'http:' ? protocol : 'http:'
+  }
+
+  /**
+   * 本地 Host/Origin fence，与 DSH client-connection 的 isTrustedApiRequest 等价：
+   * Host 必须是 loopback、监听器 bind 地址或 connection.trustedHosts 中的地址；
+   * 拒绝 sec-fetch-site: cross-site；带 Origin 时必须是同一 authority（默认端口按 Origin 的 scheme 归一化）。
+   */
+  function trustedByLocalFence(req) {
+    const headers = req.headers ?? {}
+    const host = headerValue(headers, 'host')
+    if (host === undefined || host === '') return false
+    const origin = headerValue(headers, 'origin')
+    const scheme = (origin !== undefined && originScheme(origin)) || listenerScheme()
+    const hostUrl = parseAuthority(host, scheme)
+    if (hostUrl === undefined) return false
+    const bind = bindHostname(readService(() => ctx.webServer?.host))
+    const hostTrusted = isLoopbackFenceHostname(hostUrl.hostname)
+      || (bind !== undefined && hostUrl.hostname === bind)
+      || isTrustedAuthority(hostUrl, connectionTrustedHosts(), scheme)
+    if (!hostTrusted) return false
+    if (headerValue(headers, 'sec-fetch-site') === 'cross-site') return false
+    if (origin === undefined || origin === '') return true
+    return isSameAuthorityOrigin(origin, host)
+  }
+
+  /** 优先使用宿主的官方 fence，缺失 connection 服务时回退到等价的本地实现。 */
+  function isTrustedRequest(req) {
+    const connection = connectionService()
+    // != null 覆盖 undefined 与 null 两种「服务不存在」形态。
+    if (connection != null && typeof connection.isTrusted === 'function') {
+      return readService(() => connection.isTrusted(req)) === true
+    }
+    return trustedByLocalFence(req)
+  }
+
+  /**
+   * 读请求防护：与写请求共用同一套 Host/来源白名单。
+   * 只读路径同样会被 DNS rebinding 利用（攻击者页面可读取网关地址、账号池与配置），
+   * 因此 GET 不再放行任意来源。
+   */
+  function assertTrustedRead(req) {
+    if (!isTrustedRequest(req)) {
+      throw Object.assign(new Error('拒绝不可信的读请求来源'), { statusCode: 403, code: 'FORBIDDEN' })
+    }
+  }
+
+  /** 写请求防护：先做 Host/来源白名单（DNS rebinding 与跨站防护），再校验请求内容类型。 */
+  function assertTrustedWrite(req) {
+    if (!isTrustedRequest(req)) {
+      throw Object.assign(new Error('拒绝不可信的写请求来源'), { statusCode: 403, code: 'FORBIDDEN' })
+    }
+    if (!isJsonContentType((req.headers ?? {})['content-type'])) {
+      // 与宿主 client-connection 对齐：实体格式不受支持时返回 415，而不是 403。
+      throw Object.assign(new Error('写请求必须使用 application/json'), {
+        statusCode: 415,
+        code: 'UNSUPPORTED_MEDIA_TYPE',
+      })
+    }
+  }
+
+  function guard(handler, { writeMethods = [], fencedRead = false } = {}) {
     return async (req, res) => {
       try {
+        const method = String(req.method ?? '').toUpperCase()
+        if (writeMethods.includes(method)) assertTrustedWrite(req)
+        else if (fencedRead && method === 'GET') assertTrustedRead(req)
         await handler(req, res)
       } catch (error) {
+        // 保留原有错误包装：断言抛出的 statusCode（403/415）与 code 原样透传，不会被包成 500。
         sendJson(res, error?.statusCode ?? 500, {
-          error: { code: 'INTERNAL', message: String(error?.message ?? error) },
+          error: { code: error?.code ?? 'INTERNAL', message: String(error?.message ?? error) },
         })
       }
     }
@@ -1116,7 +1288,7 @@ export function apply(ctx) {
         if (req.method !== 'GET') return sendJson(res, 405, { error: { code: 'METHOD', message: 'GET only' } })
         const force = new URL(req.url ?? '/', 'http://localhost').searchParams.has('force')
         sendJson(res, 200, await buildStatus(force))
-      }),
+      }, { fencedRead: true }),
     }),
   )
 
@@ -1182,7 +1354,7 @@ export function apply(ctx) {
           probe,
           status,
         })
-      }),
+      }, { writeMethods: ['PUT'], fencedRead: true }),
     }),
   )
 
@@ -1196,7 +1368,7 @@ export function apply(ctx) {
         const result = await buildAccounts(params.has('force'), params.has('quota'))
         const { status, ...body } = result
         sendJson(res, status ?? 200, body)
-      }),
+      }, { fencedRead: true }),
     }),
   )
 }

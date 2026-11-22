@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.12
+
+- **补上三条接口的来源围栏与写请求内容类型校验（安全修复）**：`/api/cpa-status`、`/api/cpa-status/config`（GET/PUT）、`/api/cpa-status/accounts` 原先以 `kind: 'exact'` 直接注册在 webServer 上，绕过了 DSH 对 `/api` 前缀通道的准入校验。实测确认的攻击链是：伪造 Host + 跨站 Origin + `Sec-Fetch-Site: cross-site` + `text/plain` 的 PUT 会返回 `200 saved:true`，把 `baseUrl` 改成攻击者地址、并覆盖 `managementKey`——在不启用插件时该风险为零（路由未注册），一旦启用即可被同机进程与 DNS rebinding 页面读写。现在三条路由统一接入宿主等价的围栏：Host 必须是环回、监听器 bind 地址或 `connection.trustedHosts` 之一，拒绝 `Sec-Fetch-Site: cross-site`，带 Origin 时必须同 authority；宿主提供 `connection.isTrusted` 时以其判定为准，缺失时回退本地等价实现。`config` 的 PUT 另加 `application/json` 校验（不匹配返回 415）。不可信来源一律返回 403，且拒绝发生在读取请求体之前，配置与密钥不会被改写。
+- 围栏为自包含实现，未引入新依赖；既有的网关同源判定 `isLoopbackHostname` 保持原样未改动（新增的围栏版本命名为 `isLoopbackFenceHostname` 以避免语义冲突）。
+
 ## 0.1.9
 
 - 增加侧边栏鼠标悬停（Hover 220ms）账号池概览卡片：无需点击即可快速查看 5 账号在线存活、脱敏邮箱、套餐徽章（Pro/Team/Free）与近 30 分钟请求流量刻度；点击则保留进入深度操作台（同步配额、配额进度条与连接设置）。
