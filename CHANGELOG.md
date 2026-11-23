@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.14
+
+- **修复折叠 rail 下悬停卡片被侧栏裁切**：侧栏折叠后布局列 `.sidebarCol` 带 `overflow: hidden`，卡片原先的 `left: 0; right: 0` 绝对定位会被挤成窄带再裁掉。现在折叠态先量触发器位置，改用 `position: fixed` 把 236px 宽卡片放到图标上方并夹在视口内；悬停中折叠/展开切换时按当前几何重新量测；量不到矩形时回落到兜底坐标而不是抛错。展开态维持原绝对定位，视觉不变。
+- **悬停卡片加高度上限与内部滚动**：`maxHeight: min(360px, 50vh)` + `overflowY: auto`，账号多时卡片内部滚动，不再向上顶出视口。
+- **悬停卡片改为纯读缓存**：不再在悬停 220ms 的回调里预取账号列表；账号尚未缓存（或确实为空）时整段省略，替换掉原先会一直显示的「正在读取账号池…」占位；账号只在打开面板的路径拉取。
+- **卡片头部与流量统计的溢出处理**：标题与「N 次/30min · 成功率」各补 `title`，标题单行省略、统计值 `flexShrink: 0` 且不换行，窄卡片下不再互相挤压。
+- 移除悬停卡片标题与网关行里的装饰性 emoji（`🏢`、`🌐`），改用纯文本标签。
+
 ## 0.1.13
 
 - **补上三条接口的来源围栏与写请求内容类型校验（安全修复）**：`/api/cpa-status`、`/api/cpa-status/config`（GET/PUT）、`/api/cpa-status/accounts` 原先以 `kind: 'exact'` 直接注册在 webServer 上，绕过了 DSH 对 `/api` 前缀通道的准入校验。实测确认的攻击链是：伪造 Host + 跨站 Origin + `Sec-Fetch-Site: cross-site` + `text/plain` 的 PUT 会返回 `200 saved:true`，把 `baseUrl` 改成攻击者地址、并覆盖 `managementKey`——在不启用插件时该风险为零（路由未注册），一旦启用即可被同机进程与 DNS rebinding 页面读写。现在三条路由统一接入宿主等价的围栏：Host 必须是环回、监听器 bind 地址或 `connection.trustedHosts` 之一，拒绝 `Sec-Fetch-Site: cross-site`，带 Origin 时必须同 authority；宿主提供 `connection.isTrusted` 时以其判定为准，缺失时回退本地等价实现。`config` 的 PUT 另加 `application/json` 校验（不匹配返回 415）。不可信来源一律返回 403，且拒绝发生在读取请求体之前，配置与密钥不会被改写。

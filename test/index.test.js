@@ -1,8 +1,12 @@
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import { Readable } from 'node:stream'
 import test from 'node:test'
 
 import { apply } from '../src/index.js'
+
+/** client.js 的源码：客户端半区在浏览器里跑，这里只做结构级断言（同 dsh-version-status）。 */
+const clientSource = () => readFileSync(new URL('../src/client.js', import.meta.url), 'utf8')
 
 /** 可信请求头：loopback 监听器，无 Origin（同源导航/本机调用）。 */
 const TRUSTED_HEADERS = { host: '127.0.0.1:3080' }
@@ -474,4 +478,92 @@ test('fence：非 GET 方法在 fence 之后仍返回 405', async () => {
   } finally {
     restore()
   }
+})
+
+// ---------------------------------------------------------------------------
+// 侧栏悬停预览（client.js）：折叠 rail 的 fixed 定位与限高。
+// 客户端半区依赖宿主 React 与 DOM，跑不了完整渲染；这里按 dsh-version-status
+// 的既有做法做源码结构断言，锁住本轮修复的关键点，防止回退成 absolute。
+// ---------------------------------------------------------------------------
+
+test('client：折叠 rail 的悬停卡片走 fixed 定位、量位置并限高', () => {
+  const source = clientSource()
+
+  // 220ms 延时保持与参考插件一致；measure 必须在 setHovering 之前完成，避免首帧错位。
+  assert.match(source, /HOVER_PREVIEW_DELAY\s*=\s*220/)
+  assert.match(source, /if \(isFolded\) measureHoverPos\(\)\s*\n\s*setHovering\(true\)/)
+  assert.match(source, /\},\s*HOVER_PREVIEW_DELAY\)/)
+
+  // 折叠态：用 ref 量触发器 getBoundingClientRect，改 position: fixed。
+  assert.match(source, /triggerRef\.current\?\.getBoundingClientRect\?\.\(\)/)
+  assert.match(source, /if \(!rect\) return/)
+  assert.match(source, /position: 'fixed',/)
+
+  // 宽度固定为可读尺寸，水平方向夹在视口内。
+  assert.match(source, /HOVER_PREVIEW_WIDTH\s*=\s*236/)
+  assert.match(source, /width: HOVER_PREVIEW_WIDTH,/)
+  assert.match(source, /left \+ HOVER_PREVIEW_WIDTH > viewportWidth - 8/)
+  assert.match(source, /left = Math\.max\(8, viewportWidth - HOVER_PREVIEW_WIDTH - 8\)/)
+  assert.match(source, /left: hoverPos \? hoverPos\.left : 8,/)
+  assert.match(source, /bottom: hoverPos \? hoverPos\.bottom : 8,/)
+
+  // 高度上限：账号多时卡片内部滚动，不再向上溢出屏幕。
+  assert.match(source, /HOVER_PREVIEW_MAX_HEIGHT = 'min\(360px, 50vh\)'/)
+  assert.match(source, /maxHeight: HOVER_PREVIEW_MAX_HEIGHT,/)
+  assert.match(source, /overflowY: 'auto',/)
+
+  // 折叠 / 展开切换时重算位置。
+  assert.match(source, /if \(!hovering \|\| !isFolded\) return/)
+  assert.match(source, /\[isFolded, hovering\]/)
+})
+
+test('client：宽侧栏定位与悬停显示前置条件保持不变', () => {
+  const source = clientSource()
+
+  // 宽侧栏仍是原来的 absolute + left/right 0 + 向上 6px。
+  assert.match(source, /position: 'absolute',/)
+  assert.match(source, /left: 0,\s*\n\s*right: 0,\s*\n\s*bottom: 'calc\(100% \+ 6px\)',/)
+
+  // 显示前置条件不得放宽：未悬停 / 面板打开 / 非 ready / 不健康一律不渲染卡片。
+  assert.match(source, /if \(!hovering \|\| state\.open \|\| st\?\.mode !== 'ready' \|\| !st\.ok\) return node/)
+
+  // 进入 / 离开仍成对挂在按钮（以及悬停包裹层）上。
+  assert.equal((source.match(/onMouseEnter,/g) || []).length, 2)
+  assert.equal((source.match(/onMouseLeave,/g) || []).length, 2)
+
+  // 卡片内容仍遍历账号池（高度上限针对的正是这条渲染路径）。
+  assert.match(source, /accounts\.map\(\(a, i\) => \{/)
+})
+
+// ---------------------------------------------------------------------------
+// 悬停纯读缓存（client.js）：悬停不再预取账号，缓存为空时省略账号区。
+// 账号预取只保留在打开面板的路径（openOverlay / StatusCard），见下方调用点计数。
+// ---------------------------------------------------------------------------
+
+test('client：悬停是纯读，不在 220ms 回调里预取账号', () => {
+  const source = clientSource()
+  const hoverCb = source.match(/hoverTimerRef\.current = setTimeout\(\(\) => \{([\s\S]*?)\}, HOVER_PREVIEW_DELAY\)/)
+  assert.ok(hoverCb, '悬停 220ms 计时回调应存在')
+  // 回调只切状态（必要时量位置），不得触发 refreshAccounts / fetch。
+  assert.doesNotMatch(hoverCb[1], /refreshAccounts/)
+  assert.doesNotMatch(hoverCb[1], /fetch\(/)
+  assert.match(hoverCb[1], /setHovering\(true\)/)
+
+  // refreshAccounts 的调用点只剩定义 + 面板/手动路径：
+  // syncQuota、openOverlay、refreshAll、StatusCard 预取、配置保存。
+  assert.equal((source.match(/refreshAccounts\(/g) || []).length, 6)
+  assert.match(source, /refreshStatus\(false\)\.then\(\(\) => refreshAccounts\(false, false\)\)/)
+  assert.match(source, /mode === 'ready' && st\.ok && !state\.accounts && !state\.accountsLoading\) refreshAccounts\(false\)/)
+})
+
+test('client：账号缓存为空时卡片省略账号区且不显示占位行', () => {
+  const source = clientSource()
+
+  // 占位行已删除；账号区整段由 accounts.length > 0 控制。
+  assert.doesNotMatch(source, /正在读取账号池/)
+  assert.match(source, /accounts\.length > 0\s*\n\s*\? h\(/)
+
+  // 不依赖额外请求的部分保留：卡片标题与 traffic 统计仍来自 status。
+  assert.match(source, /CPA 账号池与网关概览/)
+  assert.match(source, /次\/30min · 成功率/)
 })

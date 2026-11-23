@@ -443,11 +443,23 @@ window.__ModuleLoader__.load({
     }
     const labelStyle = { display: 'block', fontSize: 12, color: T.secondary, marginBottom: 4 }
 
+    // ---------- 悬停预览卡片 ----------
+    /** 悬停 220ms 后才展开预览卡片：与 dsh-link-pulse / dsh-version-status 的悬停卡片一致。 */
+    const HOVER_PREVIEW_DELAY = 220
+    /** 折叠 rail 下 fixed 卡片的目标宽度：够放「账号名 + 方案徽标」两列，又不至于占满视口。 */
+    const HOVER_PREVIEW_WIDTH = 236
+    /** 卡片高度上限：账号多时内部滚动，不向上顶出视口。 */
+    const HOVER_PREVIEW_MAX_HEIGHT = 'min(360px, 50vh)'
+
     // ---------- 常驻入口 ----------
     function FooterEntry(props) {
       const state = useStore()
       const [hovering, setHovering] = useState(false)
+      const [hoverPos, setHoverPos] = useState(null)
       const hoverTimerRef = React.useRef(null)
+      const triggerRef = React.useRef(null)
+      // 侧栏折叠成 rail 时宿主传 wide === false；此时侧栏列（overflow: hidden）会裁掉绝对定位卡片。
+      const isFolded = props?.wide === false
 
       useEffect(() => {
         refreshStatus(false)
@@ -455,14 +467,40 @@ window.__ModuleLoader__.load({
         return () => clearInterval(timer)
       }, [])
 
+      // 卸载时清掉待触发的悬停定时器，避免 220ms 后对已卸载组件 setState。
+      useEffect(() => () => clearTimeout(hoverTimerRef.current), [])
+
+      // 折叠态先量触发器位置，把 fixed 卡片放到图标上方的可读区域并夹在视口内。
+      // ref 未挂载（rect 缺失）时直接返回，卡片回落到兜底坐标，不会因异常而消失。
+      const measureHoverPos = () => {
+        const rect = triggerRef.current?.getBoundingClientRect?.()
+        if (!rect) return
+        const viewportWidth = window.innerWidth || 0
+        let left = Math.round(rect.left)
+        if (viewportWidth > 0 && left + HOVER_PREVIEW_WIDTH > viewportWidth - 8) {
+          left = Math.max(8, viewportWidth - HOVER_PREVIEW_WIDTH - 8)
+        }
+        setHoverPos({
+          left,
+          bottom: Math.max(8, Math.round((window.innerHeight || 0) - rect.top + 6)),
+        })
+      }
+
+      // rail 展开 / 收起会同时改变可用宽度与定位方式：悬停中切换模式时重算 fixed 坐标，
+      // 否则会沿用折叠态测得的旧位置（或 null 兜底）。
+      useEffect(() => {
+        if (!hovering || !isFolded) return
+        measureHoverPos()
+      }, [isFolded, hovering])
+
       const onMouseEnter = () => {
         clearTimeout(hoverTimerRef.current)
         hoverTimerRef.current = setTimeout(() => {
+          if (isFolded) measureHoverPos()
           setHovering(true)
-          if (!state.accounts && !state.accountsLoading) {
-            refreshAccounts(false, false)
-          }
-        }, 220)
+          // 悬停是纯读缓存：不在这里预取账号。账号只由打开面板的路径拉取
+          // （openOverlay / StatusCard）；缓存为空时卡片省略账号区，而不是发请求。
+        }, HOVER_PREVIEW_DELAY)
       }
       const onMouseLeave = () => {
         clearTimeout(hoverTimerRef.current)
@@ -545,6 +583,7 @@ window.__ModuleLoader__.load({
           onMouseLeave,
           onClick: toggleOverlay,
           title,
+          ref: triggerRef,
         },
         h('span', { className: color === T.ok ? 'cpa-dot-live' : undefined, style: dotStyle(color) }),
         labelEl,
@@ -555,6 +594,24 @@ window.__ModuleLoader__.load({
       const accounts = state.accounts || []
       const gateways = state.gateways || []
       const tr = st.traffic
+
+      // 定位：宽侧栏保持原来的绝对定位（left/right 0，向上 6px），视觉不变；
+      // 折叠 rail 改用 fixed + 实测坐标，绕开 .sidebarCol 的 overflow: hidden，
+      // 并把宽度固定为可读尺寸、夹在视口内。
+      const cardBox = isFolded
+        ? {
+            position: 'fixed',
+            left: hoverPos ? hoverPos.left : 8,
+            bottom: hoverPos ? hoverPos.bottom : 8,
+            width: HOVER_PREVIEW_WIDTH,
+            maxWidth: 'calc(100vw - 16px)',
+          }
+        : {
+            position: 'absolute',
+            left: 0,
+            right: 0,
+            bottom: 'calc(100% + 6px)',
+          }
 
       return h(
         'div',
@@ -569,10 +626,10 @@ window.__ModuleLoader__.load({
           {
             className: 'cpa-panel-enter',
             style: {
-              position: 'absolute',
-              left: 0,
-              right: 0,
-              bottom: 'calc(100% + 6px)',
+              ...cardBox,
+              // 高度上限：账号多时卡片内部滚动，而不是向上溢出视口。
+              maxHeight: HOVER_PREVIEW_MAX_HEIGHT,
+              overflowY: 'auto',
               background: T.bg,
               border: `1px solid ${T.border2}`,
               borderRadius: '10px',
@@ -586,31 +643,35 @@ window.__ModuleLoader__.load({
           },
           h(
             'div',
-            { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 } },
-            h('span', { style: { fontWeight: 600, fontSize: '12px' } }, '🏢 CPA 账号池与网关概览'),
+            { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 6 } },
+            h('span', { title: 'CPA 账号池与网关概览', style: { fontWeight: 600, fontSize: '12px', minWidth: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' } }, 'CPA 账号池与网关概览'),
             tr
               ? h(
                   'span',
-                  { style: { fontSize: '10px', color: T.secondary, fontVariantNumeric: 'tabular-nums' } },
-                  `${tr.requests} 次/30min · 成功率 ${fmtPct(tr.successRate)}`,
+                  {
+                    title: `${tr.requests ?? 0} 次/30min · 成功率 ${fmtPct(tr.successRate)}`,
+                    style: { flexShrink: 0, whiteSpace: 'nowrap', fontSize: '10px', color: T.secondary, fontVariantNumeric: 'tabular-nums' },
+                  },
+                  `${tr.requests ?? 0} 次/30min · 成功率 ${fmtPct(tr.successRate)}`,
                 )
               : null,
           ),
-          h(
-            'div',
-            {
-              style: {
-                borderTop: `1px dashed ${T.border}`,
-                paddingTop: 8,
-                marginTop: 6,
-                display: 'flex',
-                flexDirection: 'column',
-                gap: 5,
-              },
-            },
-            accounts.length === 0
-              ? h('div', { style: { color: T.secondary, fontSize: 10 } }, '正在读取账号池…')
-              : accounts.map((a, i) => {
+          // 悬停纯读缓存：账号还没预取（或确实为空）时整段省略——不放任何会一直空转的占位行；
+          // 标题与 traffic 统计来自 status，不依赖额外请求。
+          accounts.length > 0
+            ? h(
+                'div',
+                {
+                  style: {
+                    borderTop: `1px dashed ${T.border}`,
+                    paddingTop: 8,
+                    marginTop: 6,
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: 5,
+                  },
+                },
+                accounts.map((a, i) => {
                   const stateColor = a.disabled ? T.secondary : a.unavailable ? T.err : T.ok
                   return h(
                     'div',
@@ -627,12 +688,13 @@ window.__ModuleLoader__.load({
                     h(PlanBadge, { plan: a.plan }),
                   )
                 }),
-          ),
+              )
+            : null,
           gateways.length > 0
             ? h(
                 'div',
                 { style: { borderTop: `1px dashed ${T.border}`, paddingTop: 6, marginTop: 8, fontSize: 10, color: T.secondary } },
-                `🌐 已接入 ${gateways.length} 个 AI 供应商网关`,
+                `已接入 ${gateways.length} 个 AI 供应商网关`,
               )
             : null,
         ),
